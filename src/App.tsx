@@ -4,21 +4,30 @@ import {
   BookOpen,
   CheckCircle2,
   Clock,
+  Cookie,
   Download,
   Gift,
   GraduationCap,
+  Gamepad2,
   Home,
+  IceCreamBowl,
   Loader2,
   Medal,
+  Music,
+  Palette,
   Pencil,
   Plus,
+  Popcorn,
   RotateCcw,
   Save,
   Settings,
   Sparkles,
   Target,
+  Ticket,
   Timer,
   Trash2,
+  Trophy,
+  Tv,
   Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -43,6 +52,8 @@ import {
   addCloudLedger,
   addCloudTask,
   DEFAULT_FAMILY_CODE,
+  deleteCloudLedger,
+  deleteCloudReward,
   deleteCloudTask,
   ensureCloudSeedData,
   fetchCloudData,
@@ -55,6 +66,7 @@ import {
   deleteCloudSubject,
   updateCloudExam,
   upsertCloudSubject,
+  upsertCloudReward,
 } from "./supabase";
 import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Subject, Task } from "./types";
 
@@ -87,6 +99,19 @@ const assignmentTypes = ["课堂作业", "课外作业"] as const;
 const examTypes = ["单元测试", "随堂测试", "月考", "期中期末考试"];
 const grades = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三", "高一", "高二", "高三"];
 const semesters = ["上学期", "下学期"];
+const rewardIconOptions = [
+  { name: "Gift", label: "礼物", icon: Gift },
+  { name: "Tv", label: "动画", icon: Tv },
+  { name: "Gamepad2", label: "游戏", icon: Gamepad2 },
+  { name: "Popcorn", label: "电影", icon: Popcorn },
+  { name: "Cookie", label: "饼干", icon: Cookie },
+  { name: "IceCreamBowl", label: "零食", icon: IceCreamBowl },
+  { name: "BookOpen", label: "阅读", icon: BookOpen },
+  { name: "Palette", label: "画画", icon: Palette },
+  { name: "Music", label: "音乐", icon: Music },
+  { name: "Ticket", label: "门票", icon: Ticket },
+  { name: "Trophy", label: "挑战", icon: Trophy },
+] as const;
 const fallbackSubjects: Subject[] = [
   { id: "chinese", name: "语文", color: "#ef4444", showOnHome: true, sortOrder: 1 },
   { id: "math", name: "数学", color: "#2563eb", showOnHome: true, sortOrder: 2 },
@@ -104,8 +129,8 @@ const userRoleKey = "homework-web-user-role";
 
 function emptyTask(): Omit<Task, "id" | "createdAt"> {
   return {
-    category: "数学",
-    assignmentType: "课外作业",
+    category: "语文",
+    assignmentType: "课堂作业",
     title: "",
     description: "",
     plannedMinutes: 30,
@@ -113,7 +138,7 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
     status: "pending",
     repeatType: "none",
     startDate: today(),
-    autoComplete: true,
+    autoComplete: false,
     rewardPoints: 1,
     penaltyPoints: 1,
     overduePoints: 0,
@@ -161,6 +186,9 @@ function App() {
   const [examGradeFilter, setExamGradeFilter] = useState("全部年级");
   const [examSemesterFilter, setExamSemesterFilter] = useState("全部学期");
   const [subjectDraft, setSubjectDraft] = useState<Subject>({ id: "", name: "", color: "#2563eb", showOnHome: true, sortOrder: 10 });
+  const [ledgerDraft, setLedgerDraft] = useState({ reason: "", points: 0 });
+  const [rewardDraft, setRewardDraft] = useState<Reward>({ id: "", title: "", description: "", pointsCost: 20, icon: "Gift", enabled: true });
+  const [editingRewardId, setEditingRewardId] = useState<string | null>(null);
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
@@ -513,6 +541,50 @@ function App() {
   const redeemReward = async (reward: Reward) => {
     if (state.points < reward.pointsCost) return;
     await addCloudLedger(familyCode, "spend", -reward.pointsCost, `兑换奖励：${reward.title}`);
+    await load();
+  };
+
+  const saveManualLedger = async () => {
+    if (!ledgerDraft.reason.trim() || ledgerDraft.points === 0) return;
+    const points = Number(ledgerDraft.points);
+    await addCloudLedger(familyCode, points > 0 ? "earn" : "adjust", points, ledgerDraft.reason.trim());
+    setLedgerDraft({ reason: "", points: 0 });
+    await load();
+  };
+
+  const removeLedger = async (id: string) => {
+    await deleteCloudLedger(familyCode, id);
+    await load();
+  };
+
+  const saveReward = async () => {
+    if (!rewardDraft.title.trim()) return;
+    const reward: Reward = {
+      ...rewardDraft,
+      id: editingRewardId ?? (rewardDraft.id || crypto.randomUUID()),
+      title: rewardDraft.title.trim(),
+      description: rewardDraft.description?.trim(),
+      pointsCost: Math.max(0, Number(rewardDraft.pointsCost) || 0),
+      icon: rewardDraft.icon || "Gift",
+      enabled: rewardDraft.enabled,
+    };
+    await upsertCloudReward(familyCode, reward);
+    setRewardDraft({ id: "", title: "", description: "", pointsCost: 20, icon: "Gift", enabled: true });
+    setEditingRewardId(null);
+    await load();
+  };
+
+  const editReward = (reward: Reward) => {
+    setEditingRewardId(reward.id);
+    setRewardDraft({ ...reward, icon: reward.icon || "Gift" });
+  };
+
+  const removeReward = async (id: string) => {
+    await deleteCloudReward(familyCode, id);
+    if (editingRewardId === id) {
+      setEditingRewardId(null);
+      setRewardDraft({ id: "", title: "", description: "", pointsCost: 20, icon: "Gift", enabled: true });
+    }
     await load();
   };
 
@@ -1154,24 +1226,85 @@ function App() {
           {activeTab === "rewards" && (
             <div className="space-y-5">
               <Header title="积分奖励" subtitle={`当前有 ${state.points} 积分，可以兑换喜欢的小奖励。`} />
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {state.rewards.map((reward) => (
-                  <article className="reward-card" key={reward.id}>
-                    <Gift size={32} />
-                    <h3>{reward.title}</h3>
-                    <p>{reward.description ?? "完成学习任务后兑换"}</p>
-                    <button className="primary-button" disabled={state.points < reward.pointsCost} onClick={() => redeemReward(reward)}>
-                      {reward.pointsCost} 分兑换
+              {userRole === "parent" && (
+                <Panel title={editingRewardId ? "修改奖励" : "添加奖励"}>
+                  <div className="reward-form">
+                    <input className="input" placeholder="奖励名称" value={rewardDraft.title} onChange={(event) => setRewardDraft({ ...rewardDraft, title: event.target.value })} />
+                    <NumberInput value={rewardDraft.pointsCost} suffix="兑换分" onChange={(value) => setRewardDraft({ ...rewardDraft, pointsCost: value })} />
+                    <button className={rewardDraft.enabled ? "primary-button" : "secondary-button"} onClick={() => setRewardDraft({ ...rewardDraft, enabled: !rewardDraft.enabled })}>
+                      {rewardDraft.enabled ? "已启用" : "已停用"}
                     </button>
-                  </article>
-                ))}
+                    <button className="primary-button" onClick={saveReward}>
+                      <Save size={20} /> {editingRewardId ? "更新" : "添加"}
+                    </button>
+                  </div>
+                  <textarea
+                    className="input mt-3 min-h-24 w-full py-3"
+                    placeholder="奖励说明，例如：周末看一集动画、选择一次晚餐"
+                    value={rewardDraft.description ?? ""}
+                    onChange={(event) => setRewardDraft({ ...rewardDraft, description: event.target.value })}
+                  />
+                  <div className="icon-picker">
+                    {rewardIconOptions.map((item) => {
+                      const Icon = item.icon;
+                      const selected = (rewardDraft.icon ?? "Gift") === item.name;
+                      return (
+                        <button className={selected ? "icon-choice icon-choice-active" : "icon-choice"} key={item.name} onClick={() => setRewardDraft({ ...rewardDraft, icon: item.name })} title={item.label}>
+                          <Icon size={20} />
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Panel>
+              )}
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {state.rewards.map((reward) => {
+                  const RewardIcon = getRewardIcon(reward.icon);
+                  return (
+                    <article className={`reward-card ${reward.enabled ? "" : "reward-disabled"}`} key={reward.id}>
+                      <RewardIcon size={32} />
+                      <h3>{reward.title}</h3>
+                      <p>{reward.description ?? "完成学习任务后兑换"}</p>
+                      <button className="primary-button" disabled={!reward.enabled || state.points < reward.pointsCost} onClick={() => redeemReward(reward)}>
+                        {reward.pointsCost} 分兑换
+                      </button>
+                      {userRole === "parent" && (
+                        <div className="mt-3 flex gap-2">
+                          <button className="secondary-button flex-1" onClick={() => editReward(reward)}>
+                            <Pencil size={18} /> 修改
+                          </button>
+                          <button className="icon-button" onClick={() => removeReward(reward.id)} aria-label="删除奖励">
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
               <Panel title="积分流水">
+                {userRole === "parent" && (
+                  <div className="ledger-form">
+                    <input className="input" placeholder="积分条目内容" value={ledgerDraft.reason} onChange={(event) => setLedgerDraft({ ...ledgerDraft, reason: event.target.value })} />
+                    <input className="input" type="number" aria-label="积分，可以是负数" placeholder="积分，可以是负数" value={ledgerDraft.points} onChange={(event) => setLedgerDraft({ ...ledgerDraft, points: Number(event.target.value) })} />
+                    <button className="primary-button" onClick={saveManualLedger}>
+                      <Plus size={20} /> 添加
+                    </button>
+                  </div>
+                )}
                 <div className="grid gap-2">
-                  {state.ledger.slice(0, 8).map((row) => (
+                  {state.ledger.slice(0, userRole === "parent" ? 20 : 8).map((row) => (
                     <div className="ledger-row" key={row.id}>
                       <span>{row.reason}</span>
-                      <strong className={row.points >= 0 ? "text-green-600" : "text-red-500"}>{row.points > 0 ? `+${row.points}` : row.points}</strong>
+                      <div className="flex items-center gap-2">
+                        <strong className={row.points >= 0 ? "text-green-600" : "text-red-500"}>{row.points > 0 ? `+${row.points}` : row.points}</strong>
+                        {userRole === "parent" && (
+                          <button className="icon-button" onClick={() => removeLedger(row.id)} aria-label="删除积分条目">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1391,6 +1524,10 @@ function NumberInput({ value, onChange, suffix, className = "" }: { value: numbe
       {suffix && <span className="shrink-0 text-sm text-slate-500">{suffix}</span>}
     </label>
   );
+}
+
+function getRewardIcon(iconName?: string) {
+  return rewardIconOptions.find((item) => item.name === iconName)?.icon ?? Gift;
 }
 
 function getTaskElapsedMinutes(task: Task) {

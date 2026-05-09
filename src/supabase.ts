@@ -205,6 +205,20 @@ export async function addCloudLedger(familyCode: string, type: PointLedger["type
   ]);
 }
 
+export async function deleteCloudLedger(familyCode: string, id: string) {
+  const { error } = await supabase.from("family_ledger").delete().eq("family_code", familyCode).eq("id", id);
+  if (error) throw error;
+}
+
+export async function upsertCloudReward(familyCode: string, reward: Reward) {
+  await upsertRows("family_rewards", [toRewardRow(familyCode, reward)]);
+}
+
+export async function deleteCloudReward(familyCode: string, id: string) {
+  const { error } = await supabase.from("family_rewards").delete().eq("family_code", familyCode).eq("id", id);
+  if (error) throw error;
+}
+
 export async function updateCloudSettings(familyCode: string, settings: AppSettings) {
   await upsertRows("family_settings", [{ id: settings.id, family_code: familyCode, child_name: settings.childName, parent_password: settings.parentPassword ?? "admin" }]);
 }
