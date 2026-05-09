@@ -1,0 +1,4 @@
+interface:
+  display_name: "Homework Web Builder"
+  short_description: "Build the local-first student homework planning app."
+  default_prompt: "Use this skill to implement the homework planning and check-in web app from requirements.md, preserving local-first storage, child-friendly UI, and Baidu Cloud OCR constraints."
