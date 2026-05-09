@@ -760,7 +760,7 @@ function App() {
                   {selectedTaskDate} 有 {filteredTasks.length} 个作业，已完成 {selectedDateCompleted} 个。跨日作业会显示在开始日期到完成日期之间的每一天。
                 </p>
               </Panel>
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid gap-4">
                 {filteredTasks.map((task) => (
                   <article className={`task-card ${task.status === "completed" ? "task-done" : ""}`} key={task.id}>
                     <div>
@@ -833,9 +833,9 @@ function App() {
                   </button>
                 </div>
               </Panel>
-              <div className="grid gap-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {state.exams.map((exam) => (
-                  <article className="row-card" key={exam.id}>
+                  <article className="exam-card" key={exam.id}>
                     <div>
                       <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, exam.subject)}22`, color: getSubjectColor(subjects, exam.subject) }}>
                         {exam.subject}

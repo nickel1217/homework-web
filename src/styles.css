@@ -102,6 +102,22 @@ button:disabled {
     @apply flex flex-col justify-between gap-4 rounded-[28px] bg-white p-5 shadow-soft sm:flex-row sm:items-center;
   }
 
+  .task-card {
+    @apply sm:items-start;
+  }
+
+  .task-card > div:first-child {
+    @apply min-w-0 flex-1;
+  }
+
+  .task-card > div:last-child {
+    @apply shrink-0 sm:max-w-xs sm:justify-end;
+  }
+
+  .exam-card {
+    @apply flex flex-col justify-between gap-4 rounded-[28px] bg-white p-5 shadow-soft;
+  }
+
   .task-done {
     @apply bg-green-50;
   }
