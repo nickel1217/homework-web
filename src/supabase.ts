@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
+import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Subject, Task } from "./types";
 
 const SUPABASE_URL = "https://ufxmtxyziymozszkoajw.supabase.co";
 const SUPABASE_ANON_KEY =
@@ -54,15 +54,26 @@ type LedgerRow = {
   created_at: string;
 };
 type SettingsRow = { id: string; family_code: string; child_name: string };
+type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
+
+const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
+  { id: "chinese", name: "语文", color: "#ef4444", show_on_home: true, sort_order: 1 },
+  { id: "math", name: "数学", color: "#2563eb", show_on_home: true, sort_order: 2 },
+  { id: "english", name: "英语", color: "#16a34a", show_on_home: true, sort_order: 3 },
+  { id: "science", name: "科学", color: "#9333ea", show_on_home: true, sort_order: 4 },
+  { id: "reading", name: "阅读", color: "#f59e0b", show_on_home: true, sort_order: 5 },
+  { id: "other", name: "其他", color: "#0d9488", show_on_home: false, sort_order: 6 },
+];
 
 export async function fetchCloudData(familyCode: string): Promise<BackupData> {
-  const [tasks, exams, badges, rewards, ledger, settings] = await Promise.all([
+  const [tasks, exams, badges, rewards, ledger, settings, subjects] = await Promise.all([
     selectRows<TaskRow>("family_tasks", familyCode, "created_at", false),
     selectRows<ExamRow>("family_exams", familyCode, "exam_date", false),
     selectRows<BadgeRow>("family_badges", familyCode),
     selectRows<RewardRow>("family_rewards", familyCode),
     selectRows<LedgerRow>("family_ledger", familyCode, "created_at", false),
     selectRows<SettingsRow>("family_settings", familyCode),
+    selectRows<SubjectRow>("family_subjects", familyCode, "sort_order"),
   ]);
 
   return {
@@ -70,6 +81,7 @@ export async function fetchCloudData(familyCode: string): Promise<BackupData> {
     exams: exams.map(fromExamRow),
     badges: badges.map(fromBadgeRow),
     rewards: rewards.map(fromRewardRow),
+    subjects: subjects.map(fromSubjectRow),
     ledger: ledger.map(fromLedgerRow),
     settings: settings.map(fromSettingsRow),
     exportedAt: new Date().toISOString(),
@@ -77,10 +89,11 @@ export async function fetchCloudData(familyCode: string): Promise<BackupData> {
 }
 
 export async function ensureCloudSeedData(familyCode: string) {
-  const [{ count: badgeCount }, { count: rewardCount }, { count: settingsCount }] = await Promise.all([
+  const [{ count: badgeCount }, { count: rewardCount }, { count: settingsCount }, { count: subjectCount }] = await Promise.all([
     countRows("family_badges", familyCode),
     countRows("family_rewards", familyCode),
     countRows("family_settings", familyCode),
+    countRows("family_subjects", familyCode),
   ]);
 
   if (!badgeCount) {
@@ -132,6 +145,10 @@ export async function ensureCloudSeedData(familyCode: string) {
   if (!settingsCount) {
     await upsertRows("family_settings", [{ id: "default", family_code: familyCode, child_name: "小朋友" }]);
   }
+
+  if (!subjectCount) {
+    await upsertRows("family_subjects", defaultSubjects.map((subject) => ({ ...subject, family_code: familyCode })));
+  }
 }
 
 export async function addCloudTask(familyCode: string, task: Task) {
@@ -150,6 +167,24 @@ export async function deleteCloudTask(familyCode: string, id: string) {
 
 export async function addCloudExam(familyCode: string, exam: ExamRecord) {
   await upsertRows("family_exams", [toExamRow(familyCode, exam)]);
+}
+
+export async function updateCloudExam(familyCode: string, exam: ExamRecord) {
+  await upsertRows("family_exams", [toExamRow(familyCode, exam)]);
+}
+
+export async function deleteCloudExam(familyCode: string, id: string) {
+  const { error } = await supabase.from("family_exams").delete().eq("family_code", familyCode).eq("id", id);
+  if (error) throw error;
+}
+
+export async function upsertCloudSubject(familyCode: string, subject: Subject) {
+  await upsertRows("family_subjects", [toSubjectRow(familyCode, subject)]);
+}
+
+export async function deleteCloudSubject(familyCode: string, id: string) {
+  const { error } = await supabase.from("family_subjects").delete().eq("family_code", familyCode).eq("id", id);
+  if (error) throw error;
 }
 
 export async function addCloudLedger(familyCode: string, type: PointLedger["type"], points: number, reason: string) {
@@ -176,6 +211,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
       deleteFamilyRows("family_exams", familyCode),
       deleteFamilyRows("family_badges", familyCode),
       deleteFamilyRows("family_rewards", familyCode),
+      deleteFamilyRows("family_subjects", familyCode),
       deleteFamilyRows("family_ledger", familyCode),
       deleteFamilyRows("family_settings", familyCode),
     ]);
@@ -186,6 +222,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
     upsertRows("family_exams", backup.exams.map((exam) => toExamRow(familyCode, exam))),
     upsertRows("family_badges", backup.badges.map((badge) => toBadgeRow(familyCode, badge))),
     upsertRows("family_rewards", backup.rewards.map((reward) => toRewardRow(familyCode, reward))),
+    upsertRows("family_subjects", (backup.subjects ?? []).map((subject) => toSubjectRow(familyCode, subject))),
     upsertRows("family_ledger", (backup.ledger ?? []).map((row) => toLedgerRow(familyCode, row))),
     upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName }))),
   ]);
@@ -285,7 +322,7 @@ function toTaskRow(familyCode: string, task: Task): TaskRow {
 }
 
 function toTaskPatch(task: Partial<Task>) {
-  return {
+  return compact({
     category: task.category,
     title: task.title,
     description: task.description,
@@ -303,7 +340,7 @@ function toTaskPatch(task: Partial<Task>) {
     penalty_points: task.penaltyPoints,
     overdue_points: task.overduePoints,
     created_at: task.createdAt,
-  };
+  });
 }
 
 function fromExamRow(row: ExamRow): ExamRecord {
@@ -411,4 +448,29 @@ function fromSettingsRow(row: SettingsRow): AppSettings {
     id: row.id,
     childName: row.child_name,
   };
+}
+
+function fromSubjectRow(row: SubjectRow): Subject {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    showOnHome: row.show_on_home,
+    sortOrder: row.sort_order,
+  };
+}
+
+function toSubjectRow(familyCode: string, subject: Subject): SubjectRow {
+  return {
+    id: subject.id,
+    family_code: familyCode,
+    name: subject.name,
+    color: subject.color,
+    show_on_home: subject.showOnHome,
+    sort_order: subject.sortOrder,
+  };
+}
+
+function compact<T extends Record<string, unknown>>(value: T) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
 }

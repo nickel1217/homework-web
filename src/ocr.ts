@@ -48,6 +48,16 @@ export async function recognizeHomeworkWithBaidu(file: File, config: BaiduOcrCon
   return parseHomeworkText((data.words_result ?? []).map((item) => item.words).join("\n"));
 }
 
+export async function testBaiduOcrConfig(config: BaiduOcrConfig) {
+  if (config.mode === "proxy") {
+    const response = await fetch(config.proxyUrl, { method: "OPTIONS" });
+    if (!response.ok && response.status !== 405) throw new Error("OCR 代理接口无法访问");
+    return "OCR 代理接口可访问";
+  }
+  await getAccessToken(config.apiKey, config.secretKey);
+  return "百度云 OCR 鉴权成功";
+}
+
 export function parseHomeworkText(text: string): OcrDraftTask[] {
   const normalizedLines = text
     .split(/\r?\n/)
@@ -112,13 +122,15 @@ function inferPoints(minutes: number) {
 }
 
 async function getAccessToken(apiKey: string, secretKey: string) {
-  const params = new URLSearchParams({
+  const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: apiKey,
     client_secret: secretKey,
   });
-  const response = await fetch(`https://aip.baidubce.com/oauth/2.0/token?${params.toString()}`, {
+  const response = await fetch("https://aip.baidubce.com/oauth/2.0/token", {
     method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
   });
   const data = (await response.json()) as BaiduTokenResponse;
   if (!response.ok || !data.access_token) {

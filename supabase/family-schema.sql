@@ -57,6 +57,17 @@ create table if not exists public.family_rewards (
   primary key (family_code, id)
 );
 
+create table if not exists public.family_subjects (
+  id text not null,
+  family_code text not null,
+  name text not null,
+  color text not null,
+  show_on_home boolean not null default true,
+  sort_order integer not null default 0,
+  primary key (family_code, id),
+  unique (family_code, name)
+);
+
 create table if not exists public.family_ledger (
   id text primary key,
   family_code text not null,
@@ -76,11 +87,13 @@ create table if not exists public.family_settings (
 create index if not exists family_tasks_family_code_idx on public.family_tasks (family_code);
 create index if not exists family_exams_family_code_idx on public.family_exams (family_code);
 create index if not exists family_ledger_family_code_idx on public.family_ledger (family_code);
+create index if not exists family_subjects_family_code_idx on public.family_subjects (family_code);
 
 alter table public.family_tasks enable row level security;
 alter table public.family_exams enable row level security;
 alter table public.family_badges enable row level security;
 alter table public.family_rewards enable row level security;
+alter table public.family_subjects enable row level security;
 alter table public.family_ledger enable row level security;
 alter table public.family_settings enable row level security;
 
@@ -95,6 +108,9 @@ create policy "Anon can use family badges" on public.family_badges for all using
 
 drop policy if exists "Anon can use family rewards" on public.family_rewards;
 create policy "Anon can use family rewards" on public.family_rewards for all using (true) with check (true);
+
+drop policy if exists "Anon can use family subjects" on public.family_subjects;
+create policy "Anon can use family subjects" on public.family_subjects for all using (true) with check (true);
 
 drop policy if exists "Anon can use family ledger" on public.family_ledger;
 create policy "Anon can use family ledger" on public.family_ledger for all using (true) with check (true);

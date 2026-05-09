@@ -1,6 +1,7 @@
 import {
   Award,
   BarChart3,
+  BookOpen,
   CheckCircle2,
   Clock,
   Download,
@@ -35,7 +36,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { parseHomeworkText, recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
+import { parseHomeworkText, recognizeHomeworkWithBaidu, testBaiduOcrConfig, type OcrDraftTask } from "./ocr";
 import {
   addCloudExam,
   addCloudLedger,
@@ -49,16 +50,21 @@ import {
   restoreCloudBackup,
   updateCloudSettings,
   updateCloudTask,
+  deleteCloudExam,
+  deleteCloudSubject,
+  updateCloudExam,
+  upsertCloudSubject,
 } from "./supabase";
-import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
+import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Subject, Task } from "./types";
 
-type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "settings";
+type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "subjects" | "settings";
 
 type AppState = {
   tasks: Task[];
   exams: ExamRecord[];
   badges: Badge[];
   rewards: Reward[];
+  subjects: Subject[];
   ledger: PointLedger[];
   settings?: AppSettings;
   points: number;
@@ -71,11 +77,19 @@ const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
   { id: "stats", label: "统计", icon: BarChart3 },
   { id: "badges", label: "勋章", icon: Medal },
   { id: "rewards", label: "奖励", icon: Gift },
+  { id: "subjects", label: "科目", icon: BookOpen },
   { id: "settings", label: "设置", icon: Settings },
 ];
 
-const categories = ["语文", "数学", "英语", "科学", "阅读", "其他"];
 const palette = ["#2563eb", "#16a34a", "#f59e0b", "#9333ea", "#ef4444", "#0d9488"];
+const fallbackSubjects: Subject[] = [
+  { id: "chinese", name: "语文", color: "#ef4444", showOnHome: true, sortOrder: 1 },
+  { id: "math", name: "数学", color: "#2563eb", showOnHome: true, sortOrder: 2 },
+  { id: "english", name: "英语", color: "#16a34a", showOnHome: true, sortOrder: 3 },
+  { id: "science", name: "科学", color: "#9333ea", showOnHome: true, sortOrder: 4 },
+  { id: "reading", name: "阅读", color: "#f59e0b", showOnHome: true, sortOrder: 5 },
+  { id: "other", name: "其他", color: "#0d9488", showOnHome: false, sortOrder: 6 },
+];
 
 const today = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
@@ -93,7 +107,7 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
     repeatType: "none",
     startDate: today(),
     autoComplete: false,
-    rewardPoints: 10,
+    rewardPoints: 1,
     penaltyPoints: 0,
     overduePoints: 0,
   };
@@ -108,6 +122,7 @@ function App() {
     exams: [],
     badges: [],
     rewards: [],
+    subjects: [],
     ledger: [],
     points: 0,
   });
@@ -120,6 +135,8 @@ function App() {
     averageScore: 85,
     examDate: today(),
   });
+  const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [subjectDraft, setSubjectDraft] = useState<Subject>({ id: "", name: "", color: "#2563eb", showOnHome: true, sortOrder: 10 });
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
@@ -149,6 +166,7 @@ function App() {
         exams: refreshed.exams,
         badges: refreshed.badges,
         rewards: refreshed.rewards,
+        subjects: refreshed.subjects ?? [],
         ledger: refreshed.ledger ?? [],
         settings,
         points: getPointBalance(refreshed.ledger ?? []),
@@ -213,22 +231,13 @@ function App() {
   }, [state.tasks]);
 
   const todayTasks = state.tasks.filter((task) => task.startDate === today());
+  const subjects = state.subjects.length > 0 ? state.subjects : fallbackSubjects;
+  const visibleSubjects = subjects.filter((subject) => subject.showOnHome);
   const completedToday = todayTasks.filter((task) => task.status === "completed");
   const studyMinutesToday = todayTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
   const completionRate = todayTasks.length === 0 ? 0 : Math.round((completedToday.length / todayTasks.length) * 100);
 
-  const scoreTrend = useMemo(
-    () =>
-      [...state.exams]
-        .reverse()
-        .slice(-8)
-        .map((exam) => ({
-          name: exam.examDate.slice(5),
-          score: Math.round((exam.score / exam.totalScore) * 100),
-          subject: exam.subject,
-        })),
-    [state.exams],
-  );
+  const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
 
   const dailyStats = useMemo(() => {
     const map = new Map<string, { date: string; minutes: number; completed: number; total: number }>();
@@ -281,18 +290,60 @@ function App() {
   };
 
   const completeTask = async (task: Task) => {
+    if (task.status === "completed") return;
     const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
     const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
     const actualMinutes = Math.max(task.actualMinutes ?? 0, task.status === "running" ? elapsed : task.actualMinutes ?? task.plannedMinutes ?? 1);
     await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
-    await addCloudLedger(familyCode, "earn", task.rewardPoints, `完成任务：${task.title}`);
+    await addCloudLedger(familyCode, "earn", 1, `按时完成作业：${task.title}`);
     await load();
   };
 
   const addExam = async () => {
     if (!examDraft.examName.trim()) return;
-    await addCloudExam(familyCode, { ...examDraft, id: crypto.randomUUID(), examName: examDraft.examName.trim() });
+    const exam = { ...examDraft, id: editingExamId ?? crypto.randomUUID(), examName: examDraft.examName.trim() };
+    if (editingExamId) await updateCloudExam(familyCode, exam);
+    else await addCloudExam(familyCode, exam);
     setExamDraft({ ...examDraft, examName: "" });
+    setEditingExamId(null);
+    await load();
+  };
+
+  const editExam = (exam: ExamRecord) => {
+    setEditingExamId(exam.id);
+    setExamDraft({
+      subject: exam.subject,
+      examName: exam.examName,
+      score: exam.score,
+      totalScore: exam.totalScore,
+      averageScore: exam.averageScore ?? 0,
+      examDate: exam.examDate,
+    });
+  };
+
+  const removeExam = async (id: string) => {
+    await deleteCloudExam(familyCode, id);
+    await load();
+  };
+
+  const saveSubject = async () => {
+    if (!subjectDraft.name.trim()) return;
+    await upsertCloudSubject(familyCode, {
+      ...subjectDraft,
+      id: subjectDraft.id || crypto.randomUUID(),
+      name: subjectDraft.name.trim(),
+      sortOrder: subjectDraft.sortOrder || subjects.length + 1,
+    });
+    setSubjectDraft({ id: "", name: "", color: "#2563eb", showOnHome: true, sortOrder: subjects.length + 2 });
+    await load();
+  };
+
+  const removeSubject = async (subject: Subject) => {
+    if (state.tasks.some((task) => task.category === subject.name) || state.exams.some((exam) => exam.subject === subject.name)) {
+      setCloudStatus("这个科目已有任务或成绩，暂时不能删除。");
+      return;
+    }
+    await deleteCloudSubject(familyCode, subject.id);
     await load();
   };
 
@@ -308,6 +359,7 @@ function App() {
       exams: state.exams,
       badges: state.badges,
       rewards: state.rewards,
+      subjects: state.subjects,
       settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName }] : [],
       ledger: state.ledger,
       exportedAt: nowIso(),
@@ -332,6 +384,28 @@ function App() {
     localStorage.setItem(ocrSettingsKey, JSON.stringify(settingsDraft.baiduOcr ?? { mode: "local", apiKey: "", secretKey: "" }));
     setOcrWarning("孩子昵称已保存到 Supabase。OCR 密钥只保存在当前浏览器。");
     await load();
+  };
+
+  const testOcrSettings = async () => {
+    const config = settingsDraft.baiduOcr ?? loadLocalOcrSettings();
+    if (!config) return;
+    setOcrWarning("正在测试百度云 OCR 配置...");
+    try {
+      const result = await testBaiduOcrConfig(
+        config.mode === "local"
+          ? { mode: "local", apiKey: config.apiKey ?? "", secretKey: config.secretKey ?? "" }
+          : { mode: "proxy", proxyUrl: config.proxyUrl ?? "" },
+      );
+      setOcrWarning(result);
+    } catch (error) {
+      setOcrWarning(
+        error instanceof TypeError
+          ? "浏览器直连百度 OCR 被拦截或网络不可达。若保存的密钥正确，可能需要使用代理接口模式。"
+          : error instanceof Error
+            ? error.message
+            : "OCR 配置测试失败",
+      );
+    }
   };
 
   const saveFamilyCode = async () => {
@@ -387,7 +461,7 @@ function App() {
       title: draft.title,
       description: draft.description,
       plannedMinutes: draft.plannedMinutes ?? 25,
-      rewardPoints: draft.rewardPoints ?? 8,
+      rewardPoints: 1,
       createdAt: nowIso(),
     });
     setOcrDrafts((items) => items.filter((item) => item !== draft));
@@ -447,7 +521,17 @@ function App() {
                         <XAxis dataKey="name" />
                         <YAxis domain={[0, 100]} />
                         <Tooltip />
-                        <Area type="monotone" dataKey="score" stroke="#2563eb" fill="#bfdbfe" />
+                        <Legend />
+                        {visibleSubjects.map((subject) => (
+                          <Area
+                            dataKey={subject.name}
+                            fill={subject.color}
+                            fillOpacity={0.12}
+                            key={subject.id}
+                            stroke={subject.color}
+                            type="monotone"
+                          />
+                        ))}
                       </AreaChart>
                     </ResponsiveContainer>
                   </ChartBox>
@@ -474,15 +558,14 @@ function App() {
             <div className="space-y-5">
               <Header title="学习计划" subtitle="少输入，多点击，任务完成马上得积分。" />
               <Panel title="添加任务">
-                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_120px_140px]">
+                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_140px]">
                   <select className="input" value={taskDraft.category} onChange={(event) => setTaskDraft({ ...taskDraft, category: event.target.value })}>
-                    {categories.map((category) => (
-                      <option key={category}>{category}</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id}>{subject.name}</option>
                     ))}
                   </select>
                   <input className="input" placeholder="例如：数学口算 20 题" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
                   <NumberInput value={taskDraft.plannedMinutes ?? 0} suffix="分钟" onChange={(value) => setTaskDraft({ ...taskDraft, plannedMinutes: value })} />
-                  <NumberInput value={taskDraft.rewardPoints} suffix="积分" onChange={(value) => setTaskDraft({ ...taskDraft, rewardPoints: value })} />
                   <select
                     className="input"
                     value={taskDraft.repeatType}
@@ -547,15 +630,14 @@ function App() {
                     <div className="grid gap-3">
                       {ocrDrafts.map((draft, index) => (
                         <div className="ocr-row" key={`${draft.title}-${index}`}>
-                          <div className="grid flex-1 gap-2 md:grid-cols-[120px_1fr_110px_110px]">
+                          <div className="grid flex-1 gap-2 md:grid-cols-[120px_1fr_110px]">
                             <select className="input" value={draft.category} onChange={(event) => updateOcrDraft(index, { category: event.target.value })}>
-                              {categories.map((category) => (
-                                <option key={category}>{category}</option>
+                              {subjects.map((subject) => (
+                                <option key={subject.id}>{subject.name}</option>
                               ))}
                             </select>
                             <input className="input" value={draft.title} onChange={(event) => updateOcrDraft(index, { title: event.target.value })} />
                             <NumberInput value={draft.plannedMinutes ?? 25} suffix="分钟" onChange={(value) => updateOcrDraft(index, { plannedMinutes: value })} />
-                            <NumberInput value={draft.rewardPoints ?? 8} suffix="积分" onChange={(value) => updateOcrDraft(index, { rewardPoints: value })} />
                           </div>
                           <button className="primary-button" onClick={() => addOcrDraft(draft)}>
                             <Plus size={20} /> 添加
@@ -570,9 +652,11 @@ function App() {
                 {state.tasks.map((task) => (
                   <article className={`task-card ${task.status === "completed" ? "task-done" : ""}`} key={task.id}>
                     <div>
-                      <span className="pill">{task.category}</span>
+                      <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, task.category)}22`, color: getSubjectColor(subjects, task.category) }}>
+                        {task.category}
+                      </span>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
-                      <p className="mt-2 text-slate-600">计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {task.actualMinutes ?? 0} 分钟 · 奖励 {task.rewardPoints} 分</p>
+                      <p className="mt-2 text-slate-600">计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {task.actualMinutes ?? 0} 分钟 · 按时完成 +1 分</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {task.status !== "completed" && (
@@ -604,8 +688,8 @@ function App() {
               <Panel title="添加成绩">
                 <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_120px_120px_120px]">
                   <select className="input" value={examDraft.subject} onChange={(event) => setExamDraft({ ...examDraft, subject: event.target.value })}>
-                    {categories.slice(0, 4).map((category) => (
-                      <option key={category}>{category}</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id}>{subject.name}</option>
                     ))}
                   </select>
                   <input className="input" placeholder="考试名称" value={examDraft.examName} onChange={(event) => setExamDraft({ ...examDraft, examName: event.target.value })} />
@@ -613,7 +697,7 @@ function App() {
                   <NumberInput value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
                   <input className="input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
                   <button className="primary-button" onClick={addExam}>
-                    <Save size={20} /> 保存
+                    <Save size={20} /> {editingExamId ? "更新" : "保存"}
                   </button>
                 </div>
               </Panel>
@@ -621,13 +705,23 @@ function App() {
                 {state.exams.map((exam) => (
                   <article className="row-card" key={exam.id}>
                     <div>
-                      <span className="pill">{exam.subject}</span>
+                      <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, exam.subject)}22`, color: getSubjectColor(subjects, exam.subject) }}>
+                        {exam.subject}
+                      </span>
                       <h3 className="mt-2 text-xl font-black">{exam.examName}</h3>
                       <p className="text-slate-500">{exam.examDate}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-3xl font-black text-blue-600">{exam.score}</p>
                       <p className="text-sm text-slate-500">满分 {exam.totalScore}</p>
+                      <div className="mt-3 flex justify-end gap-2">
+                        <button className="secondary-button" onClick={() => editExam(exam)}>
+                          修改
+                        </button>
+                        <button className="danger-button" onClick={() => removeExam(exam.id)}>
+                          删除
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -658,7 +752,7 @@ function App() {
                       <PieChart>
                         <Pie data={categoryStats} dataKey="value" nameKey="name" innerRadius={55} outerRadius={95} paddingAngle={4}>
                           {categoryStats.map((entry, index) => (
-                            <Cell key={entry.name} fill={palette[index % palette.length]} />
+                            <Cell key={entry.name} fill={getSubjectColor(subjects, entry.name) ?? palette[index % palette.length]} />
                           ))}
                         </Pie>
                         <Tooltip />
@@ -712,6 +806,47 @@ function App() {
                   ))}
                 </div>
               </Panel>
+            </div>
+          )}
+
+          {activeTab === "subjects" && (
+            <div className="space-y-5">
+              <Header title="科目设置" subtitle="给每个科目设置颜色，并决定是否显示在首页成绩趋势里。" />
+              <Panel title={subjectDraft.id ? "修改科目" : "添加科目"}>
+                <div className="grid gap-3 lg:grid-cols-[1fr_120px_150px_140px]">
+                  <input className="input" placeholder="科目名称" value={subjectDraft.name} onChange={(event) => setSubjectDraft({ ...subjectDraft, name: event.target.value })} />
+                  <input className="input h-12" type="color" value={subjectDraft.color} onChange={(event) => setSubjectDraft({ ...subjectDraft, color: event.target.value })} />
+                  <button
+                    className={subjectDraft.showOnHome ? "primary-button" : "secondary-button"}
+                    onClick={() => setSubjectDraft({ ...subjectDraft, showOnHome: !subjectDraft.showOnHome })}
+                  >
+                    {subjectDraft.showOnHome ? "首页显示" : "首页隐藏"}
+                  </button>
+                  <button className="primary-button" onClick={saveSubject}>
+                    <Save size={20} /> 保存
+                  </button>
+                </div>
+              </Panel>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {subjects.map((subject) => (
+                  <article className="row-card" key={subject.id}>
+                    <div>
+                      <span className="pill" style={{ backgroundColor: `${subject.color}22`, color: subject.color }}>
+                        {subject.name}
+                      </span>
+                      <p className="mt-2 font-bold text-slate-600">{subject.showOnHome ? "显示在首页趋势" : "不显示在首页趋势"}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="secondary-button" onClick={() => setSubjectDraft(subject)}>
+                        修改
+                      </button>
+                      <button className="danger-button" onClick={() => removeSubject(subject)}>
+                        删除
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           )}
 
@@ -800,6 +935,9 @@ function App() {
                   <button className="primary-button" onClick={saveSettings}>
                     <Save size={20} /> 保存 OCR 配置
                   </button>
+                  <button className="secondary-button" onClick={testOcrSettings}>
+                    测试 OCR 配置
+                  </button>
                   {ocrWarning && <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">{ocrWarning}</p>}
                 </div>
               </Panel>
@@ -818,7 +956,7 @@ function App() {
                 <p className="mt-1 font-bold text-slate-500">分钟</p>
               </div>
             </div>
-            <p className="mt-4 text-lg font-bold text-slate-600">计划 {focusTask.plannedMinutes ?? 0} 分钟 · 完成奖励 {focusTask.rewardPoints} 积分</p>
+            <p className="mt-4 text-lg font-bold text-slate-600">计划 {focusTask.plannedMinutes ?? 0} 分钟 · 按时完成 +1 分</p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {focusTask.status !== "running" && (
                 <button
@@ -902,6 +1040,26 @@ function getTaskElapsedMinutes(task: Task) {
     return Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
   }
   return task.actualMinutes ?? 0;
+}
+
+function getSubjectColor(subjects: Subject[], name: string) {
+  return subjects.find((subject) => subject.name === name)?.color ?? "#2563eb";
+}
+
+function buildSubjectScoreTrend(exams: ExamRecord[], subjects: Subject[]) {
+  const subjectNames = new Set(subjects.map((subject) => subject.name));
+  const rows = new Map<string, Record<string, string | number>>();
+  for (const exam of exams) {
+    if (!subjectNames.has(exam.subject)) continue;
+    const key = exam.examDate;
+    const row = rows.get(key) ?? { name: exam.examDate.slice(5) };
+    row[exam.subject] = Math.round((exam.score / exam.totalScore) * 100);
+    rows.set(key, row);
+  }
+  return [...rows.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-10)
+    .map(([, value]) => value);
 }
 
 function loadLocalOcrSettings(): AppSettings["baiduOcr"] {

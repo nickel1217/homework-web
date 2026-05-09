@@ -54,6 +54,14 @@ export type Reward = {
   enabled: boolean;
 };
 
+export type Subject = {
+  id: string;
+  name: string;
+  color: string;
+  showOnHome: boolean;
+  sortOrder: number;
+};
+
 export type PointLedger = {
   id: string;
   type: "earn" | "spend" | "adjust";
@@ -78,6 +86,7 @@ export type BackupData = {
   exams: ExamRecord[];
   badges: Badge[];
   rewards: Reward[];
+  subjects?: Subject[];
   settings: AppSettings[];
   ledger?: PointLedger[];
   exportedAt?: string;
