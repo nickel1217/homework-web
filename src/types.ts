@@ -79,6 +79,7 @@ export type PointLedger = {
 export type AppSettings = {
   id: string;
   childName: string;
+  parentPassword?: string;
   baiduOcr?: {
     mode: "proxy" | "local";
     proxyUrl?: string;

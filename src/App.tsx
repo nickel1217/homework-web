@@ -6,6 +6,7 @@ import {
   Clock,
   Download,
   Gift,
+  GraduationCap,
   Home,
   Loader2,
   Medal,
@@ -95,7 +96,7 @@ const fallbackSubjects: Subject[] = [
   { id: "other", name: "其他", color: "#0d9488", showOnHome: false, sortOrder: 6 },
 ];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => toLocalDateInputValue(new Date());
 const nowIso = () => new Date().toISOString();
 const familyCodeKey = "homework-web-family-code";
 const ocrSettingsKey = "homework-web-local-ocr";
@@ -170,6 +171,7 @@ function App() {
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
     childName: "小朋友",
+    parentPassword: "admin",
     baiduOcr: loadLocalOcrSettings(),
   });
   const [cloudStatus, setCloudStatus] = useState("正在连接 Supabase...");
@@ -206,7 +208,7 @@ function App() {
 
   const ensureRepeatInstances = async (tasks: Task[]) => {
     const todayDate = today();
-    const weekday = new Date(`${todayDate}T00:00:00`).getDay();
+    const weekday = parseLocalDate(todayDate).getDay();
     const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
     const dueTemplates = tasks.filter((task) => {
       if (task.startDate >= todayDate) return false;
@@ -312,6 +314,17 @@ function App() {
     return [...map.values()].slice(-10);
   }, [state.tasks]);
 
+  const subjectTimeStats = useMemo(() => {
+    const map = new Map<string, { subject: string; minutes: number; planned: number }>();
+    for (const task of state.tasks) {
+      const item = map.get(task.category) ?? { subject: task.category, minutes: 0, planned: 0 };
+      item.minutes += task.actualMinutes ?? 0;
+      item.planned += task.plannedMinutes ?? 0;
+      map.set(task.category, item);
+    }
+    return [...map.values()];
+  }, [state.tasks]);
+
   const categoryStats = useMemo(() => {
     const map = new Map<string, number>();
     for (const task of state.tasks) {
@@ -336,8 +349,9 @@ function App() {
   };
 
   const enterAsParent = () => {
-    if (parentCodeDraft.trim() !== familyCode) {
-      setCloudStatus("家长验证失败：请输入当前家庭同步码。");
+    const password = state.settings?.parentPassword ?? settingsDraft.parentPassword ?? "admin";
+    if (parentCodeDraft.trim() !== password) {
+      setCloudStatus("家长验证失败：请输入家长密码。初始密码是 admin。");
       return;
     }
     localStorage.setItem(userRoleKey, "parent");
@@ -427,7 +441,7 @@ function App() {
     try {
       const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
       const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
-      const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : Math.max(task.actualMinutes ?? 0, task.plannedMinutes ?? 1);
+      const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : (task.actualMinutes ?? 0);
       const points = task.autoComplete ? (isTaskOverdue(task) ? task.overduePoints : task.rewardPoints) : 0;
       await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
       if (points !== 0) await addCloudLedger(familyCode, points > 0 ? "earn" : "adjust", points, `${isTaskOverdue(task) ? "逾期完成" : "按时完成"}作业：${task.title}`);
@@ -509,7 +523,7 @@ function App() {
       badges: state.badges,
       rewards: state.rewards,
       subjects: state.subjects,
-      settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName }] : [],
+      settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName, parentPassword: state.settings.parentPassword ?? "admin" }] : [],
       ledger: state.ledger,
       exportedAt: nowIso(),
     };
@@ -533,7 +547,7 @@ function App() {
     await updateCloudSettings(familyCode, nextSettings);
     localStorage.setItem(ocrSettingsKey, JSON.stringify(nextSettings.baiduOcr));
     setSettingsDraft(nextSettings);
-    setOcrWarning("孩子昵称已保存到 Supabase。OCR 现在使用云端代理，不会从浏览器直连百度。");
+    setOcrWarning("设置已保存到 Supabase。OCR 现在使用云端代理，不会从浏览器直连百度。");
     await load();
   };
 
@@ -628,13 +642,13 @@ function App() {
       <main className="grid min-h-screen place-items-center bg-[#f6f8ff] p-4 text-slate-900">
         <section className="w-full max-w-xl rounded-[30px] bg-white p-6 shadow-soft">
           <h1 className="text-3xl font-black">成长星球</h1>
-          <p className="mt-2 text-slate-600">请选择登录身份。学生可直接进入，家长用家庭同步码验证后管理科目和设置。</p>
+          <p className="mt-2 text-slate-600">请选择登录身份。学生可直接进入，家长用密码验证后管理科目和设置。</p>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button className="primary-button" onClick={enterAsStudent}>
               学生进入
             </button>
             <div className="grid gap-3">
-              <input className="input" placeholder="家长输入家庭同步码" value={parentCodeDraft} onChange={(event) => setParentCodeDraft(event.target.value)} />
+              <input className="input" placeholder="家长密码，初始 admin" type="password" value={parentCodeDraft} onChange={(event) => setParentCodeDraft(event.target.value)} />
               <button className="secondary-button" onClick={enterAsParent}>
                 家长验证
               </button>
@@ -769,10 +783,12 @@ function App() {
                   </label>
                 </div>
                 <div className="mt-3 rounded-2xl bg-slate-50 p-4">
-                  <label className="flex items-center gap-3 font-black text-slate-700">
-                    <input checked={taskDraft.autoComplete} type="checkbox" onChange={(event) => setTaskDraft({ ...taskDraft, autoComplete: event.target.checked })} />
-                    打开积分奖惩
-                  </label>
+                  <button className={`reward-toggle ${taskDraft.autoComplete ? "reward-toggle-on" : ""}`} onClick={() => setTaskDraft({ ...taskDraft, autoComplete: !taskDraft.autoComplete })}>
+                    <span>
+                      <GraduationCap size={18} />
+                    </span>
+                    <strong>{taskDraft.autoComplete ? "积分奖惩已打开" : "打开积分奖惩"}</strong>
+                  </button>
                   {taskDraft.autoComplete && (
                     <div className="mt-3 grid gap-3 md:grid-cols-3">
                       <NumberInput value={taskDraft.rewardPoints} suffix="按时奖励" onChange={(value) => setTaskDraft({ ...taskDraft, rewardPoints: value })} />
@@ -1037,10 +1053,14 @@ function App() {
                           {exam.subject}
                         </span>
                         <h3 className="mt-2 truncate text-lg font-black">{exam.examName}</h3>
-                        <p className="text-sm font-bold text-slate-500">{exam.grade} · {exam.semester} · {exam.examType}</p>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <span className="mini-tag">{exam.grade}</span>
+                          <span className="mini-tag mini-tag-green">{exam.semester}</span>
+                          <span className="mini-tag mini-tag-blue">{exam.examType}</span>
+                        </div>
                       </div>
                       <div className="score-ring" style={{ "--score": `${formatPercent(exam.score, exam.totalScore)}%` } as React.CSSProperties}>
-                        <span>{formatPercent(exam.score, exam.totalScore)}%</span>
+                        <span>{exam.score}<small>/{exam.totalScore}</small></span>
                       </div>
                     </div>
                     <div className="flex items-end justify-between gap-3">
@@ -1070,10 +1090,10 @@ function App() {
                 <Panel title="计划用时 / 实际用时">
                   <ChartBox>
                     <ResponsiveContainer>
-                      <BarChart data={dailyStats} layout="vertical">
+                      <BarChart data={subjectTimeStats} layout="vertical">
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis type="number" />
-                        <YAxis dataKey="date" type="category" width={56} />
+                        <YAxis dataKey="subject" type="category" width={56} />
                         <Tooltip />
                         <Legend />
                         <Bar dataKey="planned" fill="#93c5fd" name="计划用时" radius={[0, 10, 10, 0]} />
@@ -1211,6 +1231,18 @@ function App() {
                     <input className="input" value={familyCodeDraft} onChange={(event) => setFamilyCodeDraft(event.target.value)} placeholder="家庭同步码" />
                     <button className="primary-button" disabled={isCloudBusy || !familyCodeDraft.trim()} onClick={saveFamilyCode}>
                       <Save size={20} /> 使用
+                    </button>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-[1fr_140px]">
+                    <input
+                      className="input"
+                      placeholder="家长密码"
+                      type="password"
+                      value={settingsDraft.parentPassword ?? "admin"}
+                      onChange={(event) => setSettingsDraft({ ...settingsDraft, parentPassword: event.target.value || "admin" })}
+                    />
+                    <button className="secondary-button" onClick={saveSettings}>
+                      保存密码
                     </button>
                   </div>
                   <p className="rounded-2xl bg-slate-50 p-4 font-bold text-slate-700">
@@ -1376,22 +1408,34 @@ function isTaskOverdue(task: Task) {
   return (task.endDate || task.startDate) < today();
 }
 
+function toLocalDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(dateText: string) {
+  const [year, month, day] = dateText.split("-").map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1);
+}
+
 function formatDateTime(value: string) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return `${date.toISOString().slice(0, 10)} ${date.toTimeString().slice(0, 5)}`;
+  return `${toLocalDateInputValue(date)} ${date.toTimeString().slice(0, 5)}`;
 }
 
 function getWeekDays(dateText: string) {
-  const date = new Date(`${dateText}T00:00:00`);
+  const date = parseLocalDate(dateText);
   const day = date.getDay();
   const monday = new Date(date);
   monday.setDate(date.getDate() - ((day + 6) % 7));
   return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((label, index) => {
     const item = new Date(monday);
     item.setDate(monday.getDate() + index);
-    return { label, date: item.toISOString().slice(0, 10) };
+    return { label, date: toLocalDateInputValue(item) };
   });
 }
 

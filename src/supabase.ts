@@ -58,7 +58,7 @@ type LedgerRow = {
   reason: string;
   created_at: string;
 };
-type SettingsRow = { id: string; family_code: string; child_name: string };
+type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null };
 type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
 
 const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
@@ -148,7 +148,7 @@ export async function ensureCloudSeedData(familyCode: string) {
   }
 
   if (!settingsCount) {
-    await upsertRows("family_settings", [{ id: "default", family_code: familyCode, child_name: "小朋友" }]);
+    await upsertRows("family_settings", [{ id: "default", family_code: familyCode, child_name: "小朋友", parent_password: "admin" }]);
   }
 
   if (!subjectCount) {
@@ -206,7 +206,7 @@ export async function addCloudLedger(familyCode: string, type: PointLedger["type
 }
 
 export async function updateCloudSettings(familyCode: string, settings: AppSettings) {
-  await upsertRows("family_settings", [{ id: settings.id, family_code: familyCode, child_name: settings.childName }]);
+  await upsertRows("family_settings", [{ id: settings.id, family_code: familyCode, child_name: settings.childName, parent_password: settings.parentPassword ?? "admin" }]);
 }
 
 export async function restoreCloudBackup(familyCode: string, backup: BackupData, mode: "overwrite" | "merge") {
@@ -229,7 +229,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
     upsertRows("family_rewards", backup.rewards.map((reward) => toRewardRow(familyCode, reward))),
     upsertRows("family_subjects", (backup.subjects ?? []).map((subject) => toSubjectRow(familyCode, subject))),
     upsertRows("family_ledger", (backup.ledger ?? []).map((row) => toLedgerRow(familyCode, row))),
-    upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName }))),
+    upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName, parent_password: setting.parentPassword ?? "admin" }))),
   ]);
 }
 
@@ -463,6 +463,7 @@ function fromSettingsRow(row: SettingsRow): AppSettings {
   return {
     id: row.id,
     childName: row.child_name,
+    parentPassword: row.parent_password ?? "admin",
   };
 }
 

@@ -92,8 +92,11 @@ create table if not exists public.family_settings (
   id text not null,
   family_code text not null,
   child_name text not null,
+  parent_password text not null default 'admin',
   primary key (family_code, id)
 );
+
+alter table public.family_settings add column if not exists parent_password text not null default 'admin';
 
 create index if not exists family_tasks_family_code_idx on public.family_tasks (family_code);
 create index if not exists family_exams_family_code_idx on public.family_exams (family_code);

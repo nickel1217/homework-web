@@ -65,6 +65,22 @@ button:disabled {
     @apply min-h-12 rounded-2xl border-2 border-slate-100 bg-slate-50 px-4 font-bold outline-none transition focus:border-blue-300 focus:bg-white;
   }
 
+  .reward-toggle {
+    @apply inline-flex min-h-11 items-center gap-2 rounded-lg border-2 border-slate-100 bg-white px-3 font-black text-slate-700 shadow-sm transition;
+  }
+
+  .reward-toggle span {
+    @apply grid size-8 place-items-center rounded-md bg-slate-100;
+  }
+
+  .reward-toggle-on {
+    @apply border-amber-200 bg-amber-50;
+  }
+
+  .reward-toggle-on span {
+    @apply bg-amber-400;
+  }
+
   .metric {
     @apply rounded-[28px] bg-white p-5 shadow-soft;
   }
@@ -126,7 +142,23 @@ button:disabled {
   }
 
   .score-ring span {
-    @apply text-xs;
+    @apply flex flex-col items-center text-sm leading-none;
+  }
+
+  .score-ring small {
+    @apply mt-0.5 text-[10px] text-slate-500;
+  }
+
+  .mini-tag {
+    @apply inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-black text-slate-600;
+  }
+
+  .mini-tag-green {
+    @apply bg-green-50 text-green-700;
+  }
+
+  .mini-tag-blue {
+    @apply bg-blue-50 text-blue-700;
   }
 
   .task-done {
