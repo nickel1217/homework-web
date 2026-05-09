@@ -1,9 +1,11 @@
 export type TaskStatus = "pending" | "running" | "paused" | "completed" | "expired";
 export type RepeatType = "none" | "daily" | "weekly";
+export type AssignmentType = "课堂作业" | "课外作业";
 
 export type Task = {
   id: string;
   category: string;
+  assignmentType?: AssignmentType;
   title: string;
   description?: string;
   plannedMinutes?: number;
@@ -25,12 +27,16 @@ export type Task = {
 export type ExamRecord = {
   id: string;
   subject: string;
+  examType?: string;
+  grade?: string;
+  semester?: string;
   examName: string;
   score: number;
   totalScore: number;
   averageScore?: number;
   classRank?: number;
   gradeRank?: number;
+  rewardPoints?: number;
   examDate: string;
 };
 

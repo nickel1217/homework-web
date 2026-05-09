@@ -12,6 +12,7 @@ type TaskRow = {
   id: string;
   family_code: string;
   category: string;
+  assignment_type?: string | null;
   title: string;
   description?: string | null;
   planned_minutes?: number | null;
@@ -34,12 +35,16 @@ type ExamRow = {
   id: string;
   family_code: string;
   subject: string;
+  exam_type?: string | null;
+  grade?: string | null;
+  semester?: string | null;
   exam_name: string;
   score: number;
   total_score: number;
   average_score?: number | null;
   class_rank?: number | null;
   grade_rank?: number | null;
+  reward_points?: number | null;
   exam_date: string;
 };
 
@@ -278,6 +283,7 @@ function fromTaskRow(row: TaskRow): Task {
   return {
     id: row.id,
     category: row.category,
+    assignmentType: (row.assignment_type as Task["assignmentType"]) ?? "课外作业",
     title: row.title,
     description: row.description ?? undefined,
     plannedMinutes: row.planned_minutes ?? undefined,
@@ -302,6 +308,7 @@ function toTaskRow(familyCode: string, task: Task): TaskRow {
     id: task.id,
     family_code: familyCode,
     category: task.category,
+    assignment_type: task.assignmentType ?? "课外作业",
     title: task.title,
     description: task.description,
     planned_minutes: task.plannedMinutes,
@@ -324,6 +331,7 @@ function toTaskRow(familyCode: string, task: Task): TaskRow {
 function toTaskPatch(task: Partial<Task>) {
   return compact({
     category: task.category,
+    assignment_type: task.assignmentType,
     title: task.title,
     description: task.description,
     planned_minutes: task.plannedMinutes,
@@ -347,12 +355,16 @@ function fromExamRow(row: ExamRow): ExamRecord {
   return {
     id: row.id,
     subject: row.subject,
+    examType: row.exam_type ?? "单元测试",
+    grade: row.grade ?? "三年级",
+    semester: row.semester ?? "下学期",
     examName: row.exam_name,
     score: row.score,
     totalScore: row.total_score,
     averageScore: row.average_score ?? undefined,
     classRank: row.class_rank ?? undefined,
     gradeRank: row.grade_rank ?? undefined,
+    rewardPoints: row.reward_points ?? 0,
     examDate: row.exam_date,
   };
 }
@@ -362,12 +374,16 @@ function toExamRow(familyCode: string, exam: ExamRecord): ExamRow {
     id: exam.id,
     family_code: familyCode,
     subject: exam.subject,
+    exam_type: exam.examType,
+    grade: exam.grade,
+    semester: exam.semester,
     exam_name: exam.examName,
     score: exam.score,
     total_score: exam.totalScore,
     average_score: exam.averageScore,
     class_rank: exam.classRank,
     grade_rank: exam.gradeRank,
+    reward_points: exam.rewardPoints,
     exam_date: exam.examDate,
   };
 }

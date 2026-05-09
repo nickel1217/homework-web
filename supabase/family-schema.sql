@@ -2,6 +2,7 @@ create table if not exists public.family_tasks (
   id text primary key,
   family_code text not null,
   category text not null,
+  assignment_type text not null default '课外作业',
   title text not null,
   description text,
   planned_minutes integer,
@@ -24,14 +25,24 @@ create table if not exists public.family_exams (
   id text primary key,
   family_code text not null,
   subject text not null,
+  exam_type text not null default '单元测试',
+  grade text not null default '三年级',
+  semester text not null default '下学期',
   exam_name text not null,
   score numeric not null,
   total_score numeric not null,
   average_score numeric,
   class_rank integer,
   grade_rank integer,
+  reward_points integer not null default 0,
   exam_date text not null
 );
+
+alter table public.family_tasks add column if not exists assignment_type text not null default '课外作业';
+alter table public.family_exams add column if not exists exam_type text not null default '单元测试';
+alter table public.family_exams add column if not exists grade text not null default '三年级';
+alter table public.family_exams add column if not exists semester text not null default '下学期';
+alter table public.family_exams add column if not exists reward_points integer not null default 0;
 
 create table if not exists public.family_badges (
   id text not null,

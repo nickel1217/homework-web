@@ -26,7 +26,7 @@ button:disabled {
 
 @layer components {
   .nav-button {
-    @apply flex min-h-14 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700 lg:justify-start lg:text-lg;
+    @apply flex min-h-14 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700 xl:justify-start xl:text-lg;
   }
 
   .nav-button-active {
@@ -115,7 +115,18 @@ button:disabled {
   }
 
   .exam-card {
-    @apply flex flex-col justify-between gap-4 rounded-[28px] bg-white p-5 shadow-soft;
+    @apply flex min-h-44 flex-col justify-between gap-3 rounded-[24px] bg-white p-4 shadow-soft;
+  }
+
+  .score-ring {
+    @apply grid size-16 shrink-0 place-items-center rounded-full text-sm font-black text-blue-700;
+    background:
+      radial-gradient(circle at center, white 58%, transparent 60%),
+      conic-gradient(#2563eb var(--score), #dbeafe 0);
+  }
+
+  .score-ring span {
+    @apply text-xs;
   }
 
   .task-done {

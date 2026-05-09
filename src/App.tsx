@@ -9,8 +9,8 @@ import {
   Home,
   Loader2,
   Medal,
+  Pencil,
   Plus,
-  Repeat,
   RotateCcw,
   Save,
   Settings,
@@ -82,6 +82,10 @@ const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
 ];
 
 const palette = ["#2563eb", "#16a34a", "#f59e0b", "#9333ea", "#ef4444", "#0d9488"];
+const assignmentTypes = ["课堂作业", "课外作业"] as const;
+const examTypes = ["单元测试", "随堂测试", "月考", "期中期末考试"];
+const grades = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三", "高一", "高二", "高三"];
+const semesters = ["上学期", "下学期"];
 const fallbackSubjects: Subject[] = [
   { id: "chinese", name: "语文", color: "#ef4444", showOnHome: true, sortOrder: 1 },
   { id: "math", name: "数学", color: "#2563eb", showOnHome: true, sortOrder: 2 },
@@ -95,10 +99,12 @@ const today = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
 const familyCodeKey = "homework-web-family-code";
 const ocrSettingsKey = "homework-web-local-ocr";
+const userRoleKey = "homework-web-user-role";
 
 function emptyTask(): Omit<Task, "id" | "createdAt"> {
   return {
     category: "数学",
+    assignmentType: "课外作业",
     title: "",
     description: "",
     plannedMinutes: 30,
@@ -106,9 +112,9 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
     status: "pending",
     repeatType: "none",
     startDate: today(),
-    autoComplete: false,
+    autoComplete: true,
     rewardPoints: 1,
-    penaltyPoints: 0,
+    penaltyPoints: 1,
     overduePoints: 0,
   };
 }
@@ -116,6 +122,8 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
 function App() {
   const [familyCode, setFamilyCode] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
   const [familyCodeDraft, setFamilyCodeDraft] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
+  const [userRole, setUserRole] = useState<"student" | "parent" | null>(() => (localStorage.getItem(userRoleKey) as "student" | "parent" | null) ?? null);
+  const [parentCodeDraft, setParentCodeDraft] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [state, setState] = useState<AppState>({
     tasks: [],
@@ -130,15 +138,27 @@ function App() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedTaskDate, setSelectedTaskDate] = useState(today());
   const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
+  const [taskSubjectFilter, setTaskSubjectFilter] = useState("全部学科");
+  const [taskTypeFilter, setTaskTypeFilter] = useState("全部类别");
+  const [taskStatusFilter, setTaskStatusFilter] = useState("全部状态");
   const [examDraft, setExamDraft] = useState({
     subject: "数学",
+    examType: "单元测试",
+    grade: "三年级",
+    semester: "下学期",
     examName: "",
     score: 95,
     totalScore: 100,
     averageScore: 85,
+    classRank: 0,
+    rewardPoints: 0,
     examDate: today(),
   });
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [examSubjectFilter, setExamSubjectFilter] = useState("全部学科");
+  const [examTypeFilter, setExamTypeFilter] = useState("全部类别");
+  const [examGradeFilter, setExamGradeFilter] = useState("全部年级");
+  const [examSemesterFilter, setExamSemesterFilter] = useState("全部学期");
   const [subjectDraft, setSubjectDraft] = useState<Subject>({ id: "", name: "", color: "#2563eb", showOnHome: true, sortOrder: 10 });
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
@@ -160,6 +180,7 @@ function App() {
     try {
       await ensureCloudSeedData(familyCode);
       const data = await fetchCloudData(familyCode);
+      await applyOverduePenalties(data.tasks);
       await ensureRepeatInstances(data.tasks);
       const withRepeats = await fetchCloudData(familyCode);
       await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges);
@@ -212,6 +233,17 @@ function App() {
     await Promise.all(creates);
   };
 
+  const applyOverduePenalties = async (tasks: Task[]) => {
+    const todayDate = today();
+    const overdueTasks = tasks.filter((task) => task.autoComplete && task.status !== "completed" && task.status !== "expired" && (task.endDate || task.startDate) < todayDate);
+    await Promise.all(
+      overdueTasks.map(async (task) => {
+        await updateCloudTask(familyCode, task.id, { status: "expired" });
+        if (task.penaltyPoints > 0) await addCloudLedger(familyCode, "adjust", -task.penaltyPoints, `未按期完成作业：${task.title}`);
+      }),
+    );
+  };
+
   useEffect(() => {
     void load();
   }, [familyCode]);
@@ -234,22 +266,45 @@ function App() {
     return () => window.clearInterval(interval);
   }, [state.tasks]);
 
+  useEffect(() => {
+    if (userRole !== "parent" && ["subjects", "settings"].includes(activeTab)) {
+      setActiveTab("dashboard");
+    }
+  }, [activeTab, userRole]);
+
   const todayTasks = state.tasks.filter((task) => taskOverlapsDate(task, today()));
   const subjects = state.subjects.length > 0 ? state.subjects : fallbackSubjects;
   const visibleSubjects = subjects.filter((subject) => subject.showOnHome);
+  const visibleTabs = tabs.filter((tab) => userRole === "parent" || !["subjects", "settings"].includes(tab.id));
   const completedToday = todayTasks.filter((task) => task.status === "completed");
   const studyMinutesToday = todayTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
   const completionRate = todayTasks.length === 0 ? 0 : Math.round((completedToday.length / todayTasks.length) * 100);
-  const filteredTasks = state.tasks.filter((task) => taskOverlapsDate(task, selectedTaskDate) && (!hideCompletedTasks || task.status !== "completed"));
+  const filteredTasks = state.tasks.filter(
+    (task) =>
+      taskOverlapsDate(task, selectedTaskDate) &&
+      (!hideCompletedTasks || task.status !== "completed") &&
+      (taskSubjectFilter === "全部学科" || task.category === taskSubjectFilter) &&
+      (taskTypeFilter === "全部类别" || task.assignmentType === taskTypeFilter) &&
+      (taskStatusFilter === "全部状态" || task.status === taskStatusFilter),
+  );
   const selectedDateCompleted = filteredTasks.filter((task) => task.status === "completed").length;
+  const filteredExams = state.exams.filter(
+    (exam) =>
+      (examSubjectFilter === "全部学科" || exam.subject === examSubjectFilter) &&
+      (examTypeFilter === "全部类别" || exam.examType === examTypeFilter) &&
+      (examGradeFilter === "全部年级" || exam.grade === examGradeFilter) &&
+      (examSemesterFilter === "全部学期" || exam.semester === examSemesterFilter),
+  );
+  const weekDays = getWeekDays(selectedTaskDate);
 
   const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
 
   const dailyStats = useMemo(() => {
-    const map = new Map<string, { date: string; minutes: number; completed: number; total: number }>();
+    const map = new Map<string, { date: string; minutes: number; planned: number; completed: number; total: number }>();
     for (const task of state.tasks) {
-      const item = map.get(task.startDate) ?? { date: task.startDate.slice(5), minutes: 0, completed: 0, total: 0 };
+      const item = map.get(task.startDate) ?? { date: task.startDate.slice(5), minutes: 0, planned: 0, completed: 0, total: 0 };
       item.minutes += task.actualMinutes ?? 0;
+      item.planned += task.plannedMinutes ?? 0;
       item.total += 1;
       if (task.status === "completed") item.completed += 1;
       map.set(task.startDate, item);
@@ -275,17 +330,25 @@ function App() {
     await load();
   };
 
-  const addRepeatTask = async () => {
-    if (!taskDraft.title.trim()) return;
-    await addCloudTask(familyCode, {
-      ...taskDraft,
-      id: crypto.randomUUID(),
-      title: taskDraft.title.trim(),
-      repeatType: "daily",
-      createdAt: nowIso(),
-    });
-    setTaskDraft(emptyTask());
-    await load();
+  const enterAsStudent = () => {
+    localStorage.setItem(userRoleKey, "student");
+    setUserRole("student");
+  };
+
+  const enterAsParent = () => {
+    if (parentCodeDraft.trim() !== familyCode) {
+      setCloudStatus("家长验证失败：请输入当前家庭同步码。");
+      return;
+    }
+    localStorage.setItem(userRoleKey, "parent");
+    setUserRole("parent");
+    setParentCodeDraft("");
+  };
+
+  const switchRole = () => {
+    localStorage.removeItem(userRoleKey);
+    setUserRole(null);
+    setActiveTab("dashboard");
   };
 
   const deleteTask = async (id: string) => {
@@ -297,6 +360,7 @@ function App() {
     setEditingTaskId(task.id);
     setTaskDraft({
       category: task.category,
+      assignmentType: task.assignmentType ?? "课外作业",
       title: task.title,
       description: task.description ?? "",
       plannedMinutes: task.plannedMinutes ?? 30,
@@ -364,9 +428,10 @@ function App() {
       const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
       const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
       const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : Math.max(task.actualMinutes ?? 0, task.plannedMinutes ?? 1);
+      const points = task.autoComplete ? (isTaskOverdue(task) ? task.overduePoints : task.rewardPoints) : 0;
       await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
-      await addCloudLedger(familyCode, "earn", 1, `按时完成作业：${task.title}`);
-      setCloudStatus(`已完成：${task.title}，+1 分`);
+      if (points !== 0) await addCloudLedger(familyCode, points > 0 ? "earn" : "adjust", points, `${isTaskOverdue(task) ? "逾期完成" : "按时完成"}作业：${task.title}`);
+      setCloudStatus(`已完成：${task.title}${points ? `，${points > 0 ? "+" : ""}${points} 分` : ""}`);
       await load();
     } catch (error) {
       setCloudStatus(error instanceof Error ? error.message : "任务完成失败");
@@ -379,7 +444,10 @@ function App() {
     if (!examDraft.examName.trim()) return;
     const exam = { ...examDraft, id: editingExamId ?? crypto.randomUUID(), examName: examDraft.examName.trim() };
     if (editingExamId) await updateCloudExam(familyCode, exam);
-    else await addCloudExam(familyCode, exam);
+    else {
+      await addCloudExam(familyCode, exam);
+      if ((exam.rewardPoints ?? 0) !== 0) await addCloudLedger(familyCode, "earn", exam.rewardPoints ?? 0, `成绩积分：${exam.examName}`);
+    }
     setExamDraft({ ...examDraft, examName: "" });
     setEditingExamId(null);
     await load();
@@ -389,10 +457,15 @@ function App() {
     setEditingExamId(exam.id);
     setExamDraft({
       subject: exam.subject,
+      examType: exam.examType ?? "单元测试",
+      grade: exam.grade ?? "三年级",
+      semester: exam.semester ?? "下学期",
       examName: exam.examName,
       score: exam.score,
       totalScore: exam.totalScore,
       averageScore: exam.averageScore ?? 0,
+      classRank: exam.classRank ?? 0,
+      rewardPoints: exam.rewardPoints ?? 0,
       examDate: exam.examDate,
     });
   };
@@ -550,10 +623,33 @@ function App() {
     setOcrDrafts((items) => items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...changes } : item)));
   };
 
+  if (!userRole) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f6f8ff] p-4 text-slate-900">
+        <section className="w-full max-w-xl rounded-[30px] bg-white p-6 shadow-soft">
+          <h1 className="text-3xl font-black">成长星球</h1>
+          <p className="mt-2 text-slate-600">请选择登录身份。学生可直接进入，家长用家庭同步码验证后管理科目和设置。</p>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <button className="primary-button" onClick={enterAsStudent}>
+              学生进入
+            </button>
+            <div className="grid gap-3">
+              <input className="input" placeholder="家长输入家庭同步码" value={parentCodeDraft} onChange={(event) => setParentCodeDraft(event.target.value)} />
+              <button className="secondary-button" onClick={enterAsParent}>
+                家长验证
+              </button>
+            </div>
+          </div>
+          {cloudStatus && <p className="mt-4 rounded-2xl bg-slate-50 p-4 font-bold text-slate-600">{cloudStatus}</p>}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f8ff] text-slate-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-4 lg:flex-row lg:px-6">
-        <aside className="rounded-[28px] bg-white p-3 shadow-soft lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:w-56">
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-4 xl:flex-row xl:px-6">
+        <aside className="rounded-[28px] bg-white p-3 shadow-soft xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)] xl:w-56">
           <div className="mb-4 flex items-center gap-3 px-3 py-2">
             <div className="grid size-12 place-items-center rounded-2xl bg-blue-600 text-white">
               <Sparkles />
@@ -563,8 +659,8 @@ function App() {
               <h1 className="text-xl font-black">成长星球</h1>
             </div>
           </div>
-          <nav className="grid grid-cols-4 gap-2 lg:grid-cols-1">
-            {tabs.map((tab) => {
+          <nav className="grid grid-cols-4 gap-2 xl:grid-cols-1">
+            {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               return (
                 <button
@@ -578,6 +674,9 @@ function App() {
               );
             })}
           </nav>
+          <button className="mt-3 w-full rounded-2xl bg-slate-50 px-3 py-2 text-sm font-black text-slate-600" onClick={switchRole}>
+            {userRole === "parent" ? "家长" : "学生"} · 切换身份
+          </button>
         </aside>
 
         <section className="flex-1 pb-10">
@@ -636,10 +735,15 @@ function App() {
             <div className="space-y-5">
               <Header title="学习计划" subtitle="少输入，多点击，任务完成马上得积分。" />
               <Panel title={editingTaskId ? "设置作业" : "添加任务"}>
-                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_140px]">
+                <div className="grid gap-3 lg:grid-cols-[140px_140px_1fr_120px_140px]">
                   <select className="input" value={taskDraft.category} onChange={(event) => setTaskDraft({ ...taskDraft, category: event.target.value })}>
                     {subjects.map((subject) => (
                       <option key={subject.id}>{subject.name}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={taskDraft.assignmentType ?? "课外作业"} onChange={(event) => setTaskDraft({ ...taskDraft, assignmentType: event.target.value as Task["assignmentType"] })}>
+                    {assignmentTypes.map((type) => (
+                      <option key={type}>{type}</option>
                     ))}
                   </select>
                   <input className="input" placeholder="例如：数学口算 20 题" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
@@ -660,9 +764,22 @@ function App() {
                     <input className="w-full bg-transparent outline-none" type="date" value={taskDraft.startDate} onChange={(event) => setTaskDraft({ ...taskDraft, startDate: event.target.value })} />
                   </label>
                   <label className="input flex items-center gap-3">
-                    <span className="shrink-0 text-sm text-slate-500">完成日期</span>
+                    <span className="shrink-0 text-sm text-slate-500">周期结束/完成日期</span>
                     <input className="w-full bg-transparent outline-none" type="date" value={taskDraft.endDate ?? ""} onChange={(event) => setTaskDraft({ ...taskDraft, endDate: event.target.value || undefined })} />
                   </label>
+                </div>
+                <div className="mt-3 rounded-2xl bg-slate-50 p-4">
+                  <label className="flex items-center gap-3 font-black text-slate-700">
+                    <input checked={taskDraft.autoComplete} type="checkbox" onChange={(event) => setTaskDraft({ ...taskDraft, autoComplete: event.target.checked })} />
+                    打开积分奖惩
+                  </label>
+                  {taskDraft.autoComplete && (
+                    <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <NumberInput value={taskDraft.rewardPoints} suffix="按时奖励" onChange={(value) => setTaskDraft({ ...taskDraft, rewardPoints: value })} />
+                      <NumberInput value={taskDraft.overduePoints} suffix="逾期完成" onChange={(value) => setTaskDraft({ ...taskDraft, overduePoints: value })} />
+                      <NumberInput value={taskDraft.penaltyPoints} suffix="未完成扣分" onChange={(value) => setTaskDraft({ ...taskDraft, penaltyPoints: value })} />
+                    </div>
+                  )}
                 </div>
                 {taskDraft.repeatType === "weekly" && (
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -689,11 +806,6 @@ function App() {
                   <button className="primary-button" onClick={addTask}>
                     {editingTaskId ? <Save size={20} /> : <Plus size={20} />} {editingTaskId ? "保存设置" : "添加"}
                   </button>
-                  {!editingTaskId && (
-                    <button className="secondary-button" onClick={addRepeatTask}>
-                      <Repeat size={20} /> 每天任务
-                    </button>
-                  )}
                   {editingTaskId && (
                     <button className="secondary-button" onClick={cancelTaskEdit}>
                       取消
@@ -737,6 +849,9 @@ function App() {
                           <button className="primary-button" onClick={() => addOcrDraft(draft)}>
                             <Plus size={20} /> 添加
                           </button>
+                          <button className="danger-button" onClick={() => setOcrDrafts((items) => items.filter((_, itemIndex) => itemIndex !== index))}>
+                            <Trash2 size={20} /> 删除
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -756,6 +871,35 @@ function App() {
                     {hideCompletedTasks ? "显示已完成" : "隐藏已完成"}
                   </button>
                 </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {weekDays.map((day) => (
+                    <button className={day.date === selectedTaskDate ? "primary-button" : "secondary-button"} key={day.date} onClick={() => setSelectedTaskDate(day.date)}>
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <select className="input" value={taskSubjectFilter} onChange={(event) => setTaskSubjectFilter(event.target.value)}>
+                    <option>全部学科</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id}>{subject.name}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={taskTypeFilter} onChange={(event) => setTaskTypeFilter(event.target.value)}>
+                    <option>全部类别</option>
+                    {assignmentTypes.map((type) => (
+                      <option key={type}>{type}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={taskStatusFilter} onChange={(event) => setTaskStatusFilter(event.target.value)}>
+                    <option>全部状态</option>
+                    <option value="pending">未开始</option>
+                    <option value="running">进行中</option>
+                    <option value="paused">已暂停</option>
+                    <option value="completed">已完成</option>
+                    <option value="expired">已过期</option>
+                  </select>
+                </div>
                 <p className="mt-3 rounded-2xl bg-slate-50 p-4 font-bold text-slate-600">
                   {selectedTaskDate} 有 {filteredTasks.length} 个作业，已完成 {selectedDateCompleted} 个。跨日作业会显示在开始日期到完成日期之间的每一天。
                 </p>
@@ -771,13 +915,17 @@ function App() {
                         <span className={`pill ${getTaskStatusClass(task.status)}`}>
                           {getTaskStatusLabel(task.status)}
                         </span>
+                        <span className="pill status-pending">{task.assignmentType ?? "课外作业"}</span>
                       </div>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
                       <p className="mt-2 text-slate-600">
-                        计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {getTaskElapsedMinutes(task)} 分钟 · 按时完成 +1 分
+                        计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {getTaskElapsedMinutes(task)} 分钟
+                        {task.autoComplete ? ` · 按时 ${task.rewardPoints} 分 · 逾期 ${task.overduePoints} 分 · 未完成 -${task.penaltyPoints} 分` : ""}
                       </p>
                       <p className="mt-1 text-sm font-bold text-slate-500">
-                        作业日期 {formatTaskDateRange(task)} · 创建于 {task.createdAt.slice(0, 10)}
+                        开始日期 {task.startDate}
+                        {task.startTime ? ` · 开始 ${formatDateTime(task.startTime)}` : ""}
+                        {task.status === "completed" && task.endTime ? ` · 完成 ${formatDateTime(task.endTime)}` : ""}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -818,40 +966,94 @@ function App() {
             <div className="space-y-5">
               <Header title="成绩记录" subtitle="记录考试，也看见一点点进步。" />
               <Panel title="添加成绩">
-                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_120px_120px_120px]">
+                <div className="grid gap-3 lg:grid-cols-[120px_140px_120px_120px_1fr]">
                   <select className="input" value={examDraft.subject} onChange={(event) => setExamDraft({ ...examDraft, subject: event.target.value })}>
                     {subjects.map((subject) => (
                       <option key={subject.id}>{subject.name}</option>
                     ))}
                   </select>
+                  <select className="input" value={examDraft.examType} onChange={(event) => setExamDraft({ ...examDraft, examType: event.target.value })}>
+                    {examTypes.map((type) => (
+                      <option key={type}>{type}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={examDraft.grade} onChange={(event) => setExamDraft({ ...examDraft, grade: event.target.value })}>
+                    {grades.map((grade) => (
+                      <option key={grade}>{grade}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={examDraft.semester} onChange={(event) => setExamDraft({ ...examDraft, semester: event.target.value })}>
+                    {semesters.map((semester) => (
+                      <option key={semester}>{semester}</option>
+                    ))}
+                  </select>
                   <input className="input" placeholder="考试名称" value={examDraft.examName} onChange={(event) => setExamDraft({ ...examDraft, examName: event.target.value })} />
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-[120px_120px_120px_120px_120px_120px]">
                   <NumberInput value={examDraft.score} onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
                   <NumberInput value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
+                  <NumberInput value={examDraft.classRank} suffix="班级名次" onChange={(value) => setExamDraft({ ...examDraft, classRank: value })} />
+                  <NumberInput value={examDraft.rewardPoints} suffix="积分" onChange={(value) => setExamDraft({ ...examDraft, rewardPoints: value })} />
                   <input className="input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
                   <button className="primary-button" onClick={addExam}>
                     <Save size={20} /> {editingExamId ? "更新" : "保存"}
                   </button>
                 </div>
               </Panel>
+              <Panel title="成绩筛选">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <select className="input" value={examSubjectFilter} onChange={(event) => setExamSubjectFilter(event.target.value)}>
+                    <option>全部学科</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id}>{subject.name}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={examGradeFilter} onChange={(event) => setExamGradeFilter(event.target.value)}>
+                    <option>全部年级</option>
+                    {grades.map((grade) => (
+                      <option key={grade}>{grade}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={examSemesterFilter} onChange={(event) => setExamSemesterFilter(event.target.value)}>
+                    <option>全部学期</option>
+                    {semesters.map((semester) => (
+                      <option key={semester}>{semester}</option>
+                    ))}
+                  </select>
+                  <select className="input" value={examTypeFilter} onChange={(event) => setExamTypeFilter(event.target.value)}>
+                    <option>全部类别</option>
+                    {examTypes.map((type) => (
+                      <option key={type}>{type}</option>
+                    ))}
+                  </select>
+                </div>
+              </Panel>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {state.exams.map((exam) => (
+                {filteredExams.map((exam) => (
                   <article className="exam-card" key={exam.id}>
-                    <div>
-                      <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, exam.subject)}22`, color: getSubjectColor(subjects, exam.subject) }}>
-                        {exam.subject}
-                      </span>
-                      <h3 className="mt-2 text-xl font-black">{exam.examName}</h3>
-                      <p className="text-slate-500">{exam.examDate}</p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, exam.subject)}22`, color: getSubjectColor(subjects, exam.subject) }}>
+                          {exam.subject}
+                        </span>
+                        <h3 className="mt-2 truncate text-lg font-black">{exam.examName}</h3>
+                        <p className="text-sm font-bold text-slate-500">{exam.grade} · {exam.semester} · {exam.examType}</p>
+                      </div>
+                      <div className="score-ring" style={{ "--score": `${formatPercent(exam.score, exam.totalScore)}%` } as React.CSSProperties}>
+                        <span>{formatPercent(exam.score, exam.totalScore)}%</span>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-3xl font-black text-blue-600">{exam.score}</p>
-                      <p className="text-sm text-slate-500">满分 {exam.totalScore}</p>
-                      <div className="mt-3 flex justify-end gap-2">
-                        <button className="secondary-button" onClick={() => editExam(exam)}>
-                          修改
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-2xl font-black text-blue-600">{exam.score}<span className="text-sm text-slate-500"> / {exam.totalScore}</span></p>
+                        <p className="text-sm font-bold text-slate-500">{exam.examDate}{exam.classRank ? ` · 班级第 ${exam.classRank} 名` : ""}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="icon-button" onClick={() => editExam(exam)} aria-label="修改成绩">
+                          <Pencil size={18} />
                         </button>
-                        <button className="danger-button" onClick={() => removeExam(exam.id)}>
-                          删除
+                        <button className="icon-button" onClick={() => removeExam(exam.id)} aria-label="删除成绩">
+                          <Trash2 size={18} />
                         </button>
                       </div>
                     </div>
@@ -865,6 +1067,21 @@ function App() {
             <div className="space-y-5">
               <Header title="学习统计" subtitle="用图表看见时间、完成率和科目分布。" />
               <div className="grid gap-5 xl:grid-cols-2">
+                <Panel title="计划用时 / 实际用时">
+                  <ChartBox>
+                    <ResponsiveContainer>
+                      <BarChart data={dailyStats} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" />
+                        <YAxis dataKey="date" type="category" width={56} />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="planned" fill="#93c5fd" name="计划用时" radius={[0, 10, 10, 0]} />
+                        <Bar dataKey="minutes" fill="#16a34a" name="实际用时" radius={[0, 10, 10, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </ChartBox>
+                </Panel>
                 <Panel title="每日学习时间">
                   <ChartBox>
                     <ResponsiveContainer>
@@ -1101,7 +1318,6 @@ function App() {
 function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header className="rounded-[30px] bg-white p-5 shadow-soft">
-      <p className="font-bold text-blue-600">Supabase · 家庭同步码</p>
       <h2 className="mt-1 text-3xl font-black tracking-normal sm:text-4xl">{title}</h2>
       <p className="mt-2 text-lg text-slate-600">{subtitle}</p>
     </header>
@@ -1156,9 +1372,32 @@ function taskOverlapsDate(task: Task, date: string) {
   return task.startDate <= date && date <= endDate;
 }
 
-function formatTaskDateRange(task: Task) {
-  if (!task.endDate || task.endDate === task.startDate) return task.startDate;
-  return `${task.startDate} 至 ${task.endDate}`;
+function isTaskOverdue(task: Task) {
+  return (task.endDate || task.startDate) < today();
+}
+
+function formatDateTime(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toISOString().slice(0, 10)} ${date.toTimeString().slice(0, 5)}`;
+}
+
+function getWeekDays(dateText: string) {
+  const date = new Date(`${dateText}T00:00:00`);
+  const day = date.getDay();
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - ((day + 6) % 7));
+  return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((label, index) => {
+    const item = new Date(monday);
+    item.setDate(monday.getDate() + index);
+    return { label, date: item.toISOString().slice(0, 10) };
+  });
+}
+
+function formatPercent(score: number, total: number) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((score / total) * 100)));
 }
 
 function getTaskStatusLabel(status: Task["status"]) {
