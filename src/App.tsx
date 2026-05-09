@@ -9,10 +9,12 @@ import {
   Loader2,
   Medal,
   Plus,
+  Repeat,
   RotateCcw,
   Save,
   Settings,
   Sparkles,
+  Target,
   Timer,
   Trash2,
   Upload,
@@ -33,7 +35,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
+import { parseHomeworkText, recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
 import {
   addCloudExam,
   addCloudLedger,
@@ -121,7 +123,9 @@ function App() {
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
+  const [ocrText, setOcrText] = useState("");
   const [isRecognizing, setIsRecognizing] = useState(false);
+  const [focusTask, setFocusTask] = useState<Task | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
     childName: "小朋友",
@@ -135,7 +139,9 @@ function App() {
     try {
       await ensureCloudSeedData(familyCode);
       const data = await fetchCloudData(familyCode);
-      await refreshCloudBadges(familyCode, data.tasks, data.badges);
+      await ensureRepeatInstances(data.tasks);
+      const withRepeats = await fetchCloudData(familyCode);
+      await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges);
       const refreshed = await fetchCloudData(familyCode);
       const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友" };
       setState({
@@ -153,6 +159,35 @@ function App() {
     } finally {
       setIsCloudBusy(false);
     }
+  };
+
+  const ensureRepeatInstances = async (tasks: Task[]) => {
+    const todayDate = today();
+    const weekday = new Date(`${todayDate}T00:00:00`).getDay();
+    const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
+    const dueTemplates = tasks.filter((task) => {
+      if (task.startDate >= todayDate) return false;
+      if (task.repeatType === "daily") return true;
+      if (task.repeatType === "weekly") return task.repeatDays?.includes(weekday);
+      return false;
+    });
+    const creates = dueTemplates
+      .filter((task) => !existingKeys.has(`${todayDate}::${task.category}::${task.title}`))
+      .map((task) =>
+        addCloudTask(familyCode, {
+          ...task,
+          id: crypto.randomUUID(),
+          status: "pending",
+          actualMinutes: 0,
+          startTime: undefined,
+          endTime: undefined,
+          repeatType: "none",
+          repeatDays: undefined,
+          startDate: todayDate,
+          createdAt: nowIso(),
+        }),
+      );
+    await Promise.all(creates);
   };
 
   useEffect(() => {
@@ -218,6 +253,19 @@ function App() {
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
     await addCloudTask(familyCode, { ...taskDraft, id: crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: nowIso() });
+    setTaskDraft(emptyTask());
+    await load();
+  };
+
+  const addRepeatTask = async () => {
+    if (!taskDraft.title.trim()) return;
+    await addCloudTask(familyCode, {
+      ...taskDraft,
+      id: crypto.randomUUID(),
+      title: taskDraft.title.trim(),
+      repeatType: "daily",
+      createdAt: nowIso(),
+    });
     setTaskDraft(emptyTask());
     await load();
   };
@@ -294,7 +342,7 @@ function App() {
   };
 
   const recognizeImage = async (file: File) => {
-    const config = state.settings?.baiduOcr;
+    const config = settingsDraft.baiduOcr ?? loadLocalOcrSettings();
     if (!config) {
       setOcrStatus("请先到设置页保存百度云 OCR 配置。");
       return;
@@ -325,6 +373,12 @@ function App() {
     }
   };
 
+  const parseManualText = () => {
+    const drafts = parseHomeworkText(ocrText);
+    setOcrDrafts(drafts);
+    setOcrStatus(drafts.length > 0 ? `拆解出 ${drafts.length} 条任务，请确认后添加。` : "没有拆解出可用任务。");
+  };
+
   const addOcrDraft = async (draft: OcrDraftTask) => {
     await addCloudTask(familyCode, {
       ...emptyTask(),
@@ -332,10 +386,16 @@ function App() {
       category: draft.category,
       title: draft.title,
       description: draft.description,
+      plannedMinutes: draft.plannedMinutes ?? 25,
+      rewardPoints: draft.rewardPoints ?? 8,
       createdAt: nowIso(),
     });
     setOcrDrafts((items) => items.filter((item) => item !== draft));
     await load();
+  };
+
+  const updateOcrDraft = (index: number, changes: Partial<OcrDraftTask>) => {
+    setOcrDrafts((items) => items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...changes } : item)));
   };
 
   return (
@@ -414,7 +474,7 @@ function App() {
             <div className="space-y-5">
               <Header title="学习计划" subtitle="少输入，多点击，任务完成马上得积分。" />
               <Panel title="添加任务">
-                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_120px_120px]">
+                <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_120px_140px]">
                   <select className="input" value={taskDraft.category} onChange={(event) => setTaskDraft({ ...taskDraft, category: event.target.value })}>
                     {categories.map((category) => (
                       <option key={category}>{category}</option>
@@ -423,8 +483,43 @@ function App() {
                   <input className="input" placeholder="例如：数学口算 20 题" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
                   <NumberInput value={taskDraft.plannedMinutes ?? 0} suffix="分钟" onChange={(value) => setTaskDraft({ ...taskDraft, plannedMinutes: value })} />
                   <NumberInput value={taskDraft.rewardPoints} suffix="积分" onChange={(value) => setTaskDraft({ ...taskDraft, rewardPoints: value })} />
+                  <select
+                    className="input"
+                    value={taskDraft.repeatType}
+                    onChange={(event) => setTaskDraft({ ...taskDraft, repeatType: event.target.value as Task["repeatType"], repeatDays: [] })}
+                  >
+                    <option value="none">不重复</option>
+                    <option value="daily">每天</option>
+                    <option value="weekly">每周</option>
+                  </select>
+                </div>
+                {taskDraft.repeatType === "weekly" && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {["日", "一", "二", "三", "四", "五", "六"].map((day, index) => {
+                      const selected = taskDraft.repeatDays?.includes(index);
+                      return (
+                        <button
+                          className={selected ? "primary-button" : "secondary-button"}
+                          key={day}
+                          onClick={() => {
+                            const days = new Set(taskDraft.repeatDays ?? []);
+                            if (selected) days.delete(index);
+                            else days.add(index);
+                            setTaskDraft({ ...taskDraft, repeatDays: [...days].sort() });
+                          }}
+                        >
+                          周{day}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-3">
                   <button className="primary-button" onClick={addTask}>
                     <Plus size={20} /> 添加
+                  </button>
+                  <button className="secondary-button" onClick={addRepeatTask}>
+                    <Repeat size={20} /> 每天任务
                   </button>
                 </div>
               </Panel>
@@ -437,13 +532,30 @@ function App() {
                     </label>
                     {ocrStatus && <span className="font-bold text-slate-600">{ocrStatus}</span>}
                   </div>
+                  <div className="grid gap-3 lg:grid-cols-[1fr_160px]">
+                    <textarea
+                      className="input min-h-28 py-3"
+                      placeholder="也可以把老师发的作业文字粘贴到这里，一键拆成任务"
+                      value={ocrText}
+                      onChange={(event) => setOcrText(event.target.value)}
+                    />
+                    <button className="primary-button self-start" onClick={parseManualText}>
+                      <Sparkles size={20} /> 智能拆解
+                    </button>
+                  </div>
                   {ocrDrafts.length > 0 && (
                     <div className="grid gap-3">
                       {ocrDrafts.map((draft, index) => (
                         <div className="ocr-row" key={`${draft.title}-${index}`}>
-                          <div>
-                            <span className="pill">{draft.category}</span>
-                            <p className="mt-2 text-lg font-black">{draft.title}</p>
+                          <div className="grid flex-1 gap-2 md:grid-cols-[120px_1fr_110px_110px]">
+                            <select className="input" value={draft.category} onChange={(event) => updateOcrDraft(index, { category: event.target.value })}>
+                              {categories.map((category) => (
+                                <option key={category}>{category}</option>
+                              ))}
+                            </select>
+                            <input className="input" value={draft.title} onChange={(event) => updateOcrDraft(index, { title: event.target.value })} />
+                            <NumberInput value={draft.plannedMinutes ?? 25} suffix="分钟" onChange={(value) => updateOcrDraft(index, { plannedMinutes: value })} />
+                            <NumberInput value={draft.rewardPoints ?? 8} suffix="积分" onChange={(value) => updateOcrDraft(index, { rewardPoints: value })} />
                           </div>
                           <button className="primary-button" onClick={() => addOcrDraft(draft)}>
                             <Plus size={20} /> 添加
@@ -467,6 +579,9 @@ function App() {
                         <>
                           <button className="secondary-button" onClick={() => startTask(task)}>
                             <Clock size={20} /> 开始
+                          </button>
+                          <button className="secondary-button" onClick={() => setFocusTask(task)}>
+                            <Target size={20} /> 专注
                           </button>
                           <button className="success-button" onClick={() => completeTask(task)}>
                             <CheckCircle2 size={20} /> 完成
@@ -692,6 +807,46 @@ function App() {
           )}
         </section>
       </div>
+      {focusTask && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-blue-950/70 p-4">
+          <section className="w-full max-w-2xl rounded-[32px] bg-white p-6 text-center shadow-soft">
+            <p className="font-black text-blue-600">{focusTask.category}</p>
+            <h2 className="mt-3 text-3xl font-black sm:text-5xl">{focusTask.title}</h2>
+            <div className="mx-auto mt-6 grid size-52 place-items-center rounded-full bg-blue-50">
+              <div>
+                <p className="text-6xl font-black text-blue-600">{getTaskElapsedMinutes(focusTask)}</p>
+                <p className="mt-1 font-bold text-slate-500">分钟</p>
+              </div>
+            </div>
+            <p className="mt-4 text-lg font-bold text-slate-600">计划 {focusTask.plannedMinutes ?? 0} 分钟 · 完成奖励 {focusTask.rewardPoints} 积分</p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {focusTask.status !== "running" && (
+                <button
+                  className="secondary-button"
+                  onClick={async () => {
+                    await startTask(focusTask);
+                    setFocusTask({ ...focusTask, status: "running", startTime: nowIso() });
+                  }}
+                >
+                  <Clock size={20} /> 开始专注
+                </button>
+              )}
+              <button
+                className="success-button"
+                onClick={async () => {
+                  await completeTask(focusTask);
+                  setFocusTask(null);
+                }}
+              >
+                <CheckCircle2 size={20} /> 完成任务
+              </button>
+              <button className="danger-button" onClick={() => setFocusTask(null)}>
+                退出
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -740,6 +895,13 @@ function NumberInput({ value, onChange, suffix }: { value: number; onChange: (va
       {suffix && <span className="shrink-0 text-sm text-slate-500">{suffix}</span>}
     </label>
   );
+}
+
+function getTaskElapsedMinutes(task: Task) {
+  if (task.status === "running" && task.startTime) {
+    return Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
+  }
+  return task.actualMinutes ?? 0;
 }
 
 function loadLocalOcrSettings(): AppSettings["baiduOcr"] {

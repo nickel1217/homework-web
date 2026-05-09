@@ -2,6 +2,8 @@ export type OcrDraftTask = {
   title: string;
   category: string;
   description?: string;
+  plannedMinutes?: number;
+  rewardPoints?: number;
 };
 
 export type BaiduOcrConfig =
@@ -47,22 +49,66 @@ export async function recognizeHomeworkWithBaidu(file: File, config: BaiduOcrCon
 }
 
 export function parseHomeworkText(text: string): OcrDraftTask[] {
-  return text
+  const normalizedLines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => ({
-      title: line,
-      category: inferCategory(line),
-      description: "来自 OCR 识别，请确认后保存",
-    }));
+    .filter(Boolean);
+  const mergedLines = mergeContinuationLines(normalizedLines);
+
+  return mergedLines.map((line) => {
+    const category = inferCategory(line);
+    const plannedMinutes = inferMinutes(line);
+    return {
+      title: cleanupTitle(line),
+      category,
+      plannedMinutes,
+      rewardPoints: inferPoints(plannedMinutes),
+      description: "来自 OCR/文本智能拆解，请确认后保存",
+    };
+  });
 }
 
 function inferCategory(line: string) {
-  if (/数学|口算|计算|应用题/.test(line)) return "数学";
-  if (/语文|作文|阅读|生字/.test(line)) return "语文";
-  if (/英语|单词|听力/.test(line)) return "英语";
+  if (/数学|口算|计算|应用题|练习册|竖式|方程|几何/.test(line)) return "数学";
+  if (/语文|作文|阅读|生字|词语|课文|背诵|默写|日记/.test(line)) return "语文";
+  if (/英语|单词|听力|跟读|课文录音|默写.*英/.test(line)) return "英语";
+  if (/科学|实验|观察|自然/.test(line)) return "科学";
+  if (/阅读|读书|课外书/.test(line)) return "阅读";
   return "其他";
+}
+
+function mergeContinuationLines(lines: string[]) {
+  const result: string[] = [];
+  for (const line of lines) {
+    const startsNewTask = /^(\d+[\).、]|[一二三四五六七八九十]+[、.．]|[-*·])/.test(line) || /[:：]$/.test(line) || inferCategory(line) !== "其他";
+    if (result.length === 0 || startsNewTask || line.length > 18) {
+      result.push(line);
+    } else {
+      result[result.length - 1] = `${result[result.length - 1]} ${line}`;
+    }
+  }
+  return result;
+}
+
+function cleanupTitle(line: string) {
+  return line
+    .replace(/^(\d+[\).、]|[一二三四五六七八九十]+[、.．]|[-*·])\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferMinutes(line: string) {
+  if (/作文|日记|阅读理解|试卷/.test(line)) return 45;
+  if (/背诵|听写|默写|单词|口算/.test(line)) return 20;
+  if (/阅读|课外书|预习|复习/.test(line)) return 30;
+  if (/练习册|应用题|计算|数学/.test(line)) return 35;
+  return 25;
+}
+
+function inferPoints(minutes: number) {
+  if (minutes >= 45) return 15;
+  if (minutes >= 30) return 10;
+  return 8;
 }
 
 async function getAccessToken(apiKey: string, secretKey: string) {
