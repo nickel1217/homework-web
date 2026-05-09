@@ -28,7 +28,7 @@ Prefer a small user-owned proxy or serverless function for token exchange and OC
 If the user insists on GitHub Pages with no proxy:
 
 - Add an opt-in parent settings form for Baidu OCR credentials.
-- Store credentials only in local browser storage or IndexedDB.
+- Store credentials only in local browser storage.
 - Show a clear warning that browser-stored credentials are visible to anyone with access to the app/browser.
 - Keep OCR disabled until credentials are configured.
 - Never include default credentials.

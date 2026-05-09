@@ -1,13 +1,13 @@
 ---
 name: homework-web-builder
-description: Build and modify the local-first primary-school homework planning and check-in web app described by requirements.md. Use when implementing React/TypeScript/Vite features, IndexedDB/Dexie persistence, child-friendly Tailwind/shadcn UI, Recharts statistics, JSON backup/import, GitHub Pages deployment, gamified points/badges/rewards, or Baidu Cloud OCR homework recognition for this project.
+description: Build and modify the primary-school homework planning and check-in web app described by requirements.md. Use when implementing React/TypeScript/Vite features, Supabase family-code persistence, child-friendly Tailwind UI, Recharts statistics, JSON backup/import, GitHub Pages deployment, gamified points/badges/rewards, or Baidu Cloud OCR homework recognition for this project.
 ---
 
 # Homework Web Builder
 
 ## Overview
 
-Use this skill to keep implementation aligned with the product requirements for the homework planning app. Favor complete, runnable, local-first features with child-friendly interaction and clear boundaries around optional Baidu Cloud OCR.
+Use this skill to keep implementation aligned with the product requirements for the homework planning app. Favor complete, runnable features with child-friendly interaction, Supabase family-code data storage, and clear boundaries around optional Baidu Cloud OCR.
 
 ## Workflow
 
@@ -21,14 +21,15 @@ Use this skill to keep implementation aligned with the product requirements for 
 ## Product Rules
 
 - Treat the app as a family-only, single-child product.
-- Store app data locally in IndexedDB by default.
+- Store learning data in Supabase tables partitioned by `family_code`.
+- Keep Baidu OCR credentials browser-local; do not upload OCR secrets to Supabase.
 - Keep JSON export/import working as the backup and restore path.
-- Avoid login, multi-child support, cloud sync, social features, rankings, complex permissions, and backend dependencies for P0.
-- Keep OCR optional and isolated so the core app works offline/local-first.
+- Avoid login, multi-child support, social features, rankings, and complex permissions for P0.
+- Keep OCR optional and isolated so the core planning app still works when OCR fails.
 
 ## Technical Rules
 
-- Use React, TypeScript strict mode, Vite, TailwindCSS, shadcn/ui, Recharts, Dexie.js, and GitHub Pages patterns.
+- Use React, TypeScript strict mode, Vite, TailwindCSS, Recharts, Supabase, and GitHub Pages patterns.
 - Prefer the repository's existing structure before adding new abstractions.
 - Use the data models from `requirements.md` as the source of truth: `Task`, `ExamRecord`, `Badge`, and `Reward`.
 - Add migrations or backward-compatible defaults when changing stored data.

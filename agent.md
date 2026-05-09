@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-Build a local-first web app for a single primary-school child and family. The app helps the child record homework, manage study plans, track study time, earn points, redeem rewards, unlock badges, and review learning growth.
+Build a Supabase-backed web app for a single primary-school child and family. The app helps the child record homework, manage study plans, track study time, earn points, redeem rewards, unlock badges, and review learning growth.
 
 The product is not a generic task manager. Prioritize low-friction homework entry, positive feedback, habit formation, and parent-friendly visibility.
 
@@ -10,7 +10,7 @@ The product is not a generic task manager. Prioritize low-friction homework entr
 
 1. Keep the app simple, fun, and easy to continue using.
 2. Prefer complete runnable features over placeholder screens.
-3. Preserve local-first behavior by default.
+3. Store learning data in Supabase by family sync code.
 4. Favor iPad and touch-friendly usage, while supporting desktop and landscape phone layouts.
 5. Avoid enterprise admin styling, dense tables, deep menus, and heavy text.
 
@@ -22,13 +22,14 @@ The product is not a generic task manager. Prioritize low-friction homework entr
 - TailwindCSS
 - shadcn/ui
 - Recharts
-- IndexedDB through Dexie.js
+- Supabase
 - GitHub Pages deployment
 
 ## Architecture Rules
 
-- Store user data in IndexedDB by default.
-- Do not introduce PostgreSQL, a backend API, cloud database, account systems, multi-child support, social features, ranking, or collaboration for P0.
+- Store study data in Supabase tables partitioned by `family_code`.
+- Keep only sensitive browser-local settings, such as Baidu OCR credentials, in local browser storage.
+- Do not introduce account systems, multi-child support, social features, ranking, or collaboration for P0.
 - Support JSON export, JSON import, overwrite import, and merge import.
 - Keep state management local and straightforward unless the codebase already establishes a stronger pattern.
 - Prefer these directories:
@@ -57,7 +58,7 @@ Implement these before P1 work:
 - Badge unlocking
 - Study statistics charts
 - Exam records
-- IndexedDB persistence
+- Supabase persistence
 - JSON import/export
 - GitHub Pages deployment
 
@@ -82,7 +83,7 @@ Never hardcode Baidu `API Key`, `Secret Key`, or access tokens in committed sour
 1. A small user-owned proxy or serverless function that stores the Baidu secret outside the browser.
 2. For family-only/local testing, an explicit local settings screen where the parent enters credentials, with clear in-app warning that browser-stored credentials are exposed to anyone using that browser.
 
-Keep OCR optional and isolated in `src/services/ocr/` or an equivalent service boundary. OCR failures must not break the local-first P0 app.
+Keep OCR optional and isolated in `src/services/ocr/` or an equivalent service boundary. OCR failures must not break the study planning app.
 
 ## Core Data Models
 

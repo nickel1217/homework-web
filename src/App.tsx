@@ -33,19 +33,22 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { createBackup, restoreBackup } from "./backup";
-import { addLedger, db, ensureSeedData, getPointBalance, refreshBadges } from "./db";
 import { recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
 import {
-  downloadCloudBackup,
-  getCurrentSession,
-  onAuthChange,
-  signInWithPassword,
-  signOut,
-  signUpWithPassword,
-  uploadCloudBackup,
+  addCloudExam,
+  addCloudLedger,
+  addCloudTask,
+  DEFAULT_FAMILY_CODE,
+  deleteCloudTask,
+  ensureCloudSeedData,
+  fetchCloudData,
+  getPointBalance,
+  refreshCloudBadges,
+  restoreCloudBackup,
+  updateCloudSettings,
+  updateCloudTask,
 } from "./supabase";
-import type { AppSettings, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
+import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
 
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "settings";
 
@@ -74,6 +77,8 @@ const palette = ["#2563eb", "#16a34a", "#f59e0b", "#9333ea", "#ef4444", "#0d9488
 
 const today = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
+const familyCodeKey = "homework-web-family-code";
+const ocrSettingsKey = "homework-web-local-ocr";
 
 function emptyTask(): Omit<Task, "id" | "createdAt"> {
   return {
@@ -93,6 +98,8 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
 }
 
 function App() {
+  const [familyCode, setFamilyCode] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
+  const [familyCodeDraft, setFamilyCodeDraft] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [state, setState] = useState<AppState>({
     tasks: [],
@@ -118,44 +125,45 @@ function App() {
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
     childName: "小朋友",
-    baiduOcr: { mode: "local", apiKey: "", secretKey: "" },
+    baiduOcr: loadLocalOcrSettings(),
   });
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authUserEmail, setAuthUserEmail] = useState("");
-  const [syncStatus, setSyncStatus] = useState("");
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState("正在连接 Supabase...");
+  const [isCloudBusy, setIsCloudBusy] = useState(false);
 
   const load = async () => {
-    await ensureSeedData();
-    await refreshBadges();
-    const [tasks, exams, badges, rewards, ledger, settings, points] = await Promise.all([
-      db.tasks.orderBy("createdAt").reverse().toArray(),
-      db.exams.orderBy("examDate").reverse().toArray(),
-      db.badges.toArray(),
-      db.rewards.toArray(),
-      db.ledger.orderBy("createdAt").reverse().toArray(),
-      db.settings.get("default"),
-      getPointBalance(),
-    ]);
-    setState({ tasks, exams, badges, rewards, ledger, settings, points });
+    setIsCloudBusy(true);
+    try {
+      await ensureCloudSeedData(familyCode);
+      const data = await fetchCloudData(familyCode);
+      await refreshCloudBadges(familyCode, data.tasks, data.badges);
+      const refreshed = await fetchCloudData(familyCode);
+      const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友" };
+      setState({
+        tasks: refreshed.tasks,
+        exams: refreshed.exams,
+        badges: refreshed.badges,
+        rewards: refreshed.rewards,
+        ledger: refreshed.ledger ?? [],
+        settings,
+        points: getPointBalance(refreshed.ledger ?? []),
+      });
+      setCloudStatus(`已连接家庭同步码：${familyCode}`);
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "Supabase 连接失败");
+    } finally {
+      setIsCloudBusy(false);
+    }
   };
 
   useEffect(() => {
     void load();
-  }, []);
-
-  useEffect(() => {
-    void getCurrentSession().then((session) => setAuthUserEmail(session?.user.email ?? ""));
-    const { data } = onAuthChange((session) => setAuthUserEmail(session?.user.email ?? ""));
-    return () => data.subscription.unsubscribe();
-  }, []);
+  }, [familyCode]);
 
   useEffect(() => {
     if (state.settings) {
       setSettingsDraft({
         ...state.settings,
-        baiduOcr: state.settings.baiduOcr ?? { mode: "local", apiKey: "", secretKey: "" },
+        baiduOcr: loadLocalOcrSettings(),
       });
     }
   }, [state.settings]);
@@ -209,18 +217,18 @@ function App() {
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
-    await db.tasks.add({ ...taskDraft, id: crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: nowIso() });
+    await addCloudTask(familyCode, { ...taskDraft, id: crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: nowIso() });
     setTaskDraft(emptyTask());
     await load();
   };
 
   const deleteTask = async (id: string) => {
-    await db.tasks.delete(id);
+    await deleteCloudTask(familyCode, id);
     await load();
   };
 
   const startTask = async (task: Task) => {
-    await db.tasks.update(task.id, { status: "running", startTime: nowIso() });
+    await updateCloudTask(familyCode, task.id, { status: "running", startTime: nowIso() });
     await load();
   };
 
@@ -228,29 +236,34 @@ function App() {
     const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
     const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
     const actualMinutes = Math.max(task.actualMinutes ?? 0, task.status === "running" ? elapsed : task.actualMinutes ?? task.plannedMinutes ?? 1);
-    await db.transaction("rw", db.tasks, db.ledger, async () => {
-      await db.tasks.update(task.id, { status: "completed", endTime: nowIso(), actualMinutes });
-      await addLedger("earn", task.rewardPoints, `完成任务：${task.title}`);
-    });
-    await refreshBadges();
+    await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
+    await addCloudLedger(familyCode, "earn", task.rewardPoints, `完成任务：${task.title}`);
     await load();
   };
 
   const addExam = async () => {
     if (!examDraft.examName.trim()) return;
-    await db.exams.add({ ...examDraft, id: crypto.randomUUID(), examName: examDraft.examName.trim() });
+    await addCloudExam(familyCode, { ...examDraft, id: crypto.randomUUID(), examName: examDraft.examName.trim() });
     setExamDraft({ ...examDraft, examName: "" });
     await load();
   };
 
   const redeemReward = async (reward: Reward) => {
     if (state.points < reward.pointsCost) return;
-    await addLedger("spend", -reward.pointsCost, `兑换奖励：${reward.title}`);
+    await addCloudLedger(familyCode, "spend", -reward.pointsCost, `兑换奖励：${reward.title}`);
     await load();
   };
 
   const downloadBackup = async () => {
-    const backup = await createBackup();
+    const backup: BackupData = {
+      tasks: state.tasks,
+      exams: state.exams,
+      badges: state.badges,
+      rewards: state.rewards,
+      settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName }] : [],
+      ledger: state.ledger,
+      exportedAt: nowIso(),
+    };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -262,62 +275,22 @@ function App() {
 
   const importBackup = async (file: File, mode: "overwrite" | "merge") => {
     const text = await file.text();
-    await restoreBackup(JSON.parse(text), mode);
+    await restoreCloudBackup(familyCode, JSON.parse(text), mode);
     await load();
   };
-
-  const runSync = async (action: () => Promise<string>) => {
-    setIsSyncing(true);
-    setSyncStatus("正在同步...");
-    try {
-      setSyncStatus(await action());
-    } catch (error) {
-      setSyncStatus(error instanceof Error ? error.message : "同步失败");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const signIn = () =>
-    runSync(async () => {
-      const session = await signInWithPassword(authEmail.trim(), authPassword);
-      setAuthUserEmail(session?.user.email ?? authEmail.trim());
-      return "登录成功";
-    });
-
-  const signUp = () =>
-    runSync(async () => {
-      const session = await signUpWithPassword(authEmail.trim(), authPassword);
-      return session ? "注册成功，已登录" : "注册成功，请按 Supabase 邮件设置完成验证后再登录";
-    });
-
-  const logout = () =>
-    runSync(async () => {
-      await signOut();
-      setAuthUserEmail("");
-      return "已退出登录";
-    });
-
-  const uploadToCloud = () =>
-    runSync(async () => {
-      const backup = await createBackup({ includeSecrets: false });
-      await uploadCloudBackup(backup);
-      return "已上传到 Supabase。百度 OCR 密钥没有上传。";
-    });
-
-  const restoreFromCloud = (mode: "overwrite" | "merge") =>
-    runSync(async () => {
-      const cloudBackup = await downloadCloudBackup();
-      if (!cloudBackup) return "云端还没有备份";
-      await restoreBackup(cloudBackup.backup_data, mode);
-      await load();
-      return mode === "overwrite" ? "已用云端备份覆盖本地数据" : "已合并云端备份到本地";
-    });
 
   const saveSettings = async () => {
-    await db.settings.put(settingsDraft);
-    setOcrWarning("设置已保存到当前浏览器。密钥不会进入 GitHub 仓库。");
+    await updateCloudSettings(familyCode, settingsDraft);
+    localStorage.setItem(ocrSettingsKey, JSON.stringify(settingsDraft.baiduOcr ?? { mode: "local", apiKey: "", secretKey: "" }));
+    setOcrWarning("孩子昵称已保存到 Supabase。OCR 密钥只保存在当前浏览器。");
     await load();
+  };
+
+  const saveFamilyCode = async () => {
+    const nextCode = familyCodeDraft.trim();
+    if (!nextCode) return;
+    localStorage.setItem(familyCodeKey, nextCode);
+    setFamilyCode(nextCode);
   };
 
   const recognizeImage = async (file: File) => {
@@ -353,7 +326,7 @@ function App() {
   };
 
   const addOcrDraft = async (draft: OcrDraftTask) => {
-    await db.tasks.add({
+    await addCloudTask(familyCode, {
       ...emptyTask(),
       id: crypto.randomUUID(),
       category: draft.category,
@@ -629,7 +602,24 @@ function App() {
 
           {activeTab === "settings" && (
             <div className="space-y-5">
-              <Header title="设置与备份" subtitle="本地优先保存，记得定期导出 JSON 备份。" />
+              <Header title="设置与备份" subtitle="学习数据保存在 Supabase，JSON 备份可用于额外保险。" />
+              <Panel title="家庭数据源">
+                <div className="space-y-4">
+                  <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">
+                    当前数据直接保存在 Supabase。不同设备输入同一个家庭同步码，就会读取同一份学习数据。
+                  </p>
+                  <div className="grid gap-3 lg:grid-cols-[1fr_140px]">
+                    <input className="input" value={familyCodeDraft} onChange={(event) => setFamilyCodeDraft(event.target.value)} placeholder="家庭同步码" />
+                    <button className="primary-button" disabled={isCloudBusy || !familyCodeDraft.trim()} onClick={saveFamilyCode}>
+                      <Save size={20} /> 使用
+                    </button>
+                  </div>
+                  <p className="rounded-2xl bg-slate-50 p-4 font-bold text-slate-700">
+                    {isCloudBusy && <Loader2 className="mr-2 inline animate-spin" size={18} />}
+                    {cloudStatus}
+                  </p>
+                </div>
+              </Panel>
               <Panel title="数据备份">
                 <div className="flex flex-wrap gap-3">
                   <button className="primary-button" onClick={downloadBackup}>
@@ -643,44 +633,6 @@ function App() {
                     <RotateCcw size={20} /> 覆盖导入
                     <input className="hidden" type="file" accept="application/json" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0], "overwrite")} />
                   </label>
-                </div>
-              </Panel>
-              <Panel title="Supabase 云同步">
-                <div className="space-y-4">
-                  <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">
-                    当前模式是本地优先：平时使用 IndexedDB，点击按钮时把学习数据同步到 Supabase。百度 OCR 密钥不会上传。
-                  </p>
-                  {authUserEmail ? (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="rounded-2xl bg-green-50 px-4 py-3 font-black text-green-700">已登录：{authUserEmail}</span>
-                      <button className="secondary-button" disabled={isSyncing} onClick={logout}>
-                        退出
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid gap-3 lg:grid-cols-[1fr_1fr_120px_120px]">
-                      <input className="input" type="email" placeholder="邮箱" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
-                      <input className="input" type="password" placeholder="密码" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} />
-                      <button className="primary-button" disabled={isSyncing || !authEmail || !authPassword} onClick={signIn}>
-                        登录
-                      </button>
-                      <button className="secondary-button" disabled={isSyncing || !authEmail || !authPassword} onClick={signUp}>
-                        注册
-                      </button>
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-3">
-                    <button className="primary-button" disabled={isSyncing || !authUserEmail} onClick={uploadToCloud}>
-                      {isSyncing ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />} 上传到云端
-                    </button>
-                    <button className="secondary-button" disabled={isSyncing || !authUserEmail} onClick={() => restoreFromCloud("merge")}>
-                      <Download size={20} /> 从云端合并
-                    </button>
-                    <button className="danger-button" disabled={isSyncing || !authUserEmail} onClick={() => restoreFromCloud("overwrite")}>
-                      <RotateCcw size={20} /> 云端覆盖本地
-                    </button>
-                  </div>
-                  {syncStatus && <p className="rounded-2xl bg-slate-50 p-4 font-bold text-slate-700">{syncStatus}</p>}
                 </div>
               </Panel>
               <Panel title="百度云 OCR">
@@ -747,7 +699,7 @@ function App() {
 function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header className="rounded-[30px] bg-white p-5 shadow-soft">
-      <p className="font-bold text-blue-600">Local First · GitHub Pages</p>
+      <p className="font-bold text-blue-600">Supabase · 家庭同步码</p>
       <h2 className="mt-1 text-3xl font-black tracking-normal sm:text-4xl">{title}</h2>
       <p className="mt-2 text-lg text-slate-600">{subtitle}</p>
     </header>
@@ -788,6 +740,16 @@ function NumberInput({ value, onChange, suffix }: { value: number; onChange: (va
       {suffix && <span className="shrink-0 text-sm text-slate-500">{suffix}</span>}
     </label>
   );
+}
+
+function loadLocalOcrSettings(): AppSettings["baiduOcr"] {
+  try {
+    const raw = localStorage.getItem(ocrSettingsKey);
+    if (!raw) return { mode: "local", apiKey: "", secretKey: "" };
+    return JSON.parse(raw) as AppSettings["baiduOcr"];
+  } catch {
+    return { mode: "local", apiKey: "", secretKey: "" };
+  }
 }
 
 export default App;

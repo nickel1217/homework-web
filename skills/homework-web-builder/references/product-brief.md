@@ -2,7 +2,7 @@
 
 ## One-Line Goal
 
-Create a GitHub Pages-deployed, local-first study planning and check-in web app for one primary-school child.
+Create a GitHub Pages-deployed study planning and check-in web app for one primary-school child, using Supabase family-code storage for cross-device data.
 
 ## Users
 
@@ -17,7 +17,7 @@ Create a GitHub Pages-deployed, local-first study planning and check-in web app 
 - Statistics page with study time, completion rate, category time share, planned vs actual time, and streak trends.
 - Badge wall with unlocked and locked badges.
 - Points and rewards page with reward redemption and points ledger.
-- IndexedDB persistence through Dexie.js.
+- Supabase persistence through a family sync code.
 - JSON backup export/import with overwrite and merge modes.
 - GitHub Pages deployment.
 
@@ -35,9 +35,7 @@ Create a GitHub Pages-deployed, local-first study planning and check-in web app 
 
 - User login.
 - Multiple children.
-- Backend service.
-- PostgreSQL or cloud database.
-- Cloud sync.
+- Account login.
 - Parent approval workflow.
 - Social features.
 - Rankings.
