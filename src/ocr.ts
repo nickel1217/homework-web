@@ -10,6 +10,8 @@ export type BaiduOcrConfig =
   | { mode: "proxy"; proxyUrl: string }
   | { mode: "local"; apiKey: string; secretKey: string };
 
+export const DEFAULT_OCR_PROXY_URL = "https://ufxmtxyziymozszkoajw.supabase.co/functions/v1/baidu-ocr";
+
 type BaiduTokenResponse = {
   access_token?: string;
   error?: string;
@@ -52,7 +54,7 @@ export async function testBaiduOcrConfig(config: BaiduOcrConfig) {
   if (config.mode === "proxy") {
     const response = await fetch(config.proxyUrl, { method: "OPTIONS" });
     if (!response.ok && response.status !== 405) throw new Error("OCR 代理接口无法访问");
-    return "OCR 代理接口可访问";
+    return "OCR 代理接口可访问，浏览器不会再直连百度云。";
   }
   await getAccessToken(config.apiKey, config.secretKey);
   return "百度云 OCR 鉴权成功";

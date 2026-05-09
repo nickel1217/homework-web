@@ -36,7 +36,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { parseHomeworkText, recognizeHomeworkWithBaidu, testBaiduOcrConfig, type OcrDraftTask } from "./ocr";
+import { DEFAULT_OCR_PROXY_URL, parseHomeworkText, recognizeHomeworkWithBaidu, testBaiduOcrConfig, type OcrDraftTask } from "./ocr";
 import {
   addCloudExam,
   addCloudLedger,
@@ -143,6 +143,7 @@ function App() {
   const [ocrText, setOcrText] = useState("");
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
     childName: "小朋友",
@@ -285,18 +286,39 @@ function App() {
   };
 
   const startTask = async (task: Task) => {
-    await updateCloudTask(familyCode, task.id, { status: "running", startTime: nowIso() });
-    await load();
+    setBusyTaskId(task.id);
+    try {
+      const startTime = task.startTime ?? nowIso();
+      await updateCloudTask(familyCode, task.id, { status: "running", startTime });
+      setState((current) => ({
+        ...current,
+        tasks: current.tasks.map((item) => (item.id === task.id ? { ...item, status: "running", startTime } : item)),
+      }));
+      setCloudStatus(`已开始：${task.title}`);
+      await load();
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "任务开始失败");
+    } finally {
+      setBusyTaskId(null);
+    }
   };
 
   const completeTask = async (task: Task) => {
     if (task.status === "completed") return;
-    const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
-    const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
-    const actualMinutes = Math.max(task.actualMinutes ?? 0, task.status === "running" ? elapsed : task.actualMinutes ?? task.plannedMinutes ?? 1);
-    await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
-    await addCloudLedger(familyCode, "earn", 1, `按时完成作业：${task.title}`);
-    await load();
+    setBusyTaskId(task.id);
+    try {
+      const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
+      const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
+      const actualMinutes = Math.max(task.actualMinutes ?? 0, task.status === "running" ? elapsed : task.actualMinutes ?? task.plannedMinutes ?? 1);
+      await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
+      await addCloudLedger(familyCode, "earn", 1, `按时完成作业：${task.title}`);
+      setCloudStatus(`已完成：${task.title}，+1 分`);
+      await load();
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "任务完成失败");
+    } finally {
+      setBusyTaskId(null);
+    }
   };
 
   const addExam = async () => {
@@ -380,21 +402,23 @@ function App() {
   };
 
   const saveSettings = async () => {
-    await updateCloudSettings(familyCode, settingsDraft);
-    localStorage.setItem(ocrSettingsKey, JSON.stringify(settingsDraft.baiduOcr ?? { mode: "local", apiKey: "", secretKey: "" }));
-    setOcrWarning("孩子昵称已保存到 Supabase。OCR 密钥只保存在当前浏览器。");
+    const nextSettings = { ...settingsDraft, baiduOcr: normalizeOcrSettings(settingsDraft.baiduOcr) };
+    await updateCloudSettings(familyCode, nextSettings);
+    localStorage.setItem(ocrSettingsKey, JSON.stringify(nextSettings.baiduOcr));
+    setSettingsDraft(nextSettings);
+    setOcrWarning("孩子昵称已保存到 Supabase。OCR 现在使用云端代理，不会从浏览器直连百度。");
     await load();
   };
 
   const testOcrSettings = async () => {
-    const config = settingsDraft.baiduOcr ?? loadLocalOcrSettings();
+    const config = normalizeOcrSettings(settingsDraft.baiduOcr ?? loadLocalOcrSettings());
     if (!config) return;
     setOcrWarning("正在测试百度云 OCR 配置...");
     try {
       const result = await testBaiduOcrConfig(
         config.mode === "local"
           ? { mode: "local", apiKey: config.apiKey ?? "", secretKey: config.secretKey ?? "" }
-          : { mode: "proxy", proxyUrl: config.proxyUrl ?? "" },
+          : { mode: "proxy", proxyUrl: config.proxyUrl ?? DEFAULT_OCR_PROXY_URL },
       );
       setOcrWarning(result);
     } catch (error) {
@@ -416,7 +440,7 @@ function App() {
   };
 
   const recognizeImage = async (file: File) => {
-    const config = settingsDraft.baiduOcr ?? loadLocalOcrSettings();
+    const config = normalizeOcrSettings(settingsDraft.baiduOcr ?? loadLocalOcrSettings());
     if (!config) {
       setOcrStatus("请先到设置页保存百度云 OCR 配置。");
       return;
@@ -432,7 +456,7 @@ function App() {
     const ocrConfig =
       config.mode === "local"
         ? { mode: "local" as const, apiKey: config.apiKey ?? "", secretKey: config.secretKey ?? "" }
-        : { mode: "proxy" as const, proxyUrl: config.proxyUrl ?? "" };
+        : { mode: "proxy" as const, proxyUrl: config.proxyUrl ?? DEFAULT_OCR_PROXY_URL };
 
     setIsRecognizing(true);
     setOcrStatus("正在识别图片...");
@@ -652,23 +676,29 @@ function App() {
                 {state.tasks.map((task) => (
                   <article className={`task-card ${task.status === "completed" ? "task-done" : ""}`} key={task.id}>
                     <div>
-                      <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, task.category)}22`, color: getSubjectColor(subjects, task.category) }}>
-                        {task.category}
-                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, task.category)}22`, color: getSubjectColor(subjects, task.category) }}>
+                          {task.category}
+                        </span>
+                        <span className={`pill ${task.status === "running" ? "status-running" : task.status === "completed" ? "status-completed" : "status-pending"}`}>
+                          {task.status === "running" ? "进行中" : task.status === "completed" ? "已完成" : "未开始"}
+                        </span>
+                      </div>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
                       <p className="mt-2 text-slate-600">计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {task.actualMinutes ?? 0} 分钟 · 按时完成 +1 分</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {task.status !== "completed" && (
                         <>
-                          <button className="secondary-button" onClick={() => startTask(task)}>
-                            <Clock size={20} /> 开始
+                          <button className={task.status === "running" ? "primary-button" : "secondary-button"} disabled={busyTaskId === task.id} onClick={() => startTask(task)}>
+                            {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Clock size={20} />}
+                            {task.status === "running" ? "已开始" : "开始"}
                           </button>
                           <button className="secondary-button" onClick={() => setFocusTask(task)}>
                             <Target size={20} /> 专注
                           </button>
-                          <button className="success-button" onClick={() => completeTask(task)}>
-                            <CheckCircle2 size={20} /> 完成
+                          <button className="success-button" disabled={busyTaskId === task.id} onClick={() => completeTask(task)}>
+                            {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />} 完成
                           </button>
                         </>
                       )}
@@ -888,50 +918,14 @@ function App() {
               <Panel title="百度云 OCR">
                 <div className="space-y-4">
                   <p className="rounded-2xl bg-yellow-50 p-4 text-yellow-900">
-                    GitHub Pages 纯前端无法安全保护 Secret Key。这里的配置只保存在当前浏览器，用于家庭自用；更推荐使用代理接口模式。
+                    GitHub Pages 浏览器直连百度云会被 CORS 拦截。当前使用 Supabase 云端代理识别，百度密钥保存在 Supabase secrets。
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      className={settingsDraft.baiduOcr?.mode === "local" ? "primary-button" : "secondary-button"}
-                      onClick={() => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: "", secretKey: "" } })}
-                    >
-                      本地密钥
-                    </button>
-                    <button
-                      className={settingsDraft.baiduOcr?.mode === "proxy" ? "primary-button" : "secondary-button"}
-                      onClick={() => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: "" } })}
-                    >
-                      代理接口
-                    </button>
-                  </div>
-                  {settingsDraft.baiduOcr?.mode === "local" ? (
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <input
-                        className="input"
-                        placeholder="百度云 API Key"
-                        value={settingsDraft.baiduOcr.apiKey ?? ""}
-                        onChange={(event) =>
-                          setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: event.target.value, secretKey: settingsDraft.baiduOcr?.secretKey ?? "" } })
-                        }
-                      />
-                      <input
-                        className="input"
-                        placeholder="百度云 Secret Key"
-                        type="password"
-                        value={settingsDraft.baiduOcr.secretKey ?? ""}
-                        onChange={(event) =>
-                          setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: settingsDraft.baiduOcr?.apiKey ?? "", secretKey: event.target.value } })
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <input
-                      className="input w-full"
-                      placeholder="https://你的域名/ocr-proxy"
-                      value={settingsDraft.baiduOcr?.proxyUrl ?? ""}
-                      onChange={(event) => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: event.target.value } })}
-                    />
-                  )}
+                  <input
+                    className="input w-full"
+                    placeholder={DEFAULT_OCR_PROXY_URL}
+                    value={normalizeOcrSettings(settingsDraft.baiduOcr)?.proxyUrl ?? DEFAULT_OCR_PROXY_URL}
+                    onChange={(event) => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: event.target.value || DEFAULT_OCR_PROXY_URL } })}
+                  />
                   <button className="primary-button" onClick={saveSettings}>
                     <Save size={20} /> 保存 OCR 配置
                   </button>
@@ -1062,13 +1056,20 @@ function buildSubjectScoreTrend(exams: ExamRecord[], subjects: Subject[]) {
     .map(([, value]) => value);
 }
 
+function normalizeOcrSettings(config: AppSettings["baiduOcr"]): AppSettings["baiduOcr"] {
+  if (!config || config.mode === "local") {
+    return { mode: "proxy", proxyUrl: DEFAULT_OCR_PROXY_URL };
+  }
+  return { mode: "proxy", proxyUrl: config.proxyUrl || DEFAULT_OCR_PROXY_URL };
+}
+
 function loadLocalOcrSettings(): AppSettings["baiduOcr"] {
   try {
     const raw = localStorage.getItem(ocrSettingsKey);
-    if (!raw) return { mode: "local", apiKey: "", secretKey: "" };
-    return JSON.parse(raw) as AppSettings["baiduOcr"];
+    if (!raw) return { mode: "proxy", proxyUrl: DEFAULT_OCR_PROXY_URL };
+    return normalizeOcrSettings(JSON.parse(raw) as AppSettings["baiduOcr"]);
   } catch {
-    return { mode: "local", apiKey: "", secretKey: "" };
+    return { mode: "proxy", proxyUrl: DEFAULT_OCR_PROXY_URL };
   }
 }
 

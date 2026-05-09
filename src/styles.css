@@ -110,6 +110,18 @@ button:disabled {
     @apply inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-black text-blue-700;
   }
 
+  .status-pending {
+    @apply bg-slate-100 text-slate-600;
+  }
+
+  .status-running {
+    @apply bg-yellow-100 text-yellow-700;
+  }
+
+  .status-completed {
+    @apply bg-green-100 text-green-700;
+  }
+
   .badge-card,
   .reward-card {
     @apply rounded-[28px] bg-white p-5 shadow-soft;
