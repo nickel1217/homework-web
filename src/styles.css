@@ -65,6 +65,48 @@ button:disabled {
     @apply min-h-12 rounded-2xl border-2 border-slate-100 bg-slate-50 px-4 font-bold outline-none transition focus:border-blue-300 focus:bg-white;
   }
 
+  .exam-form-main {
+    @apply grid gap-3;
+    grid-template-columns: minmax(110px, 0.75fr) minmax(150px, 1fr) minmax(120px, 0.85fr) minmax(120px, 0.85fr) minmax(220px, 2fr);
+  }
+
+  .exam-form-details {
+    @apply mt-3 grid gap-3;
+    grid-template-columns: minmax(96px, 0.75fr) minmax(96px, 0.75fr) minmax(150px, 1fr) minmax(130px, 0.9fr) minmax(170px, 1.1fr) minmax(130px, 0.85fr);
+  }
+
+  .exam-field-small,
+  .exam-field-medium,
+  .exam-date-input,
+  .exam-save-button {
+    @apply w-full min-w-0;
+  }
+
+  .exam-field-medium {
+    @apply px-5;
+  }
+
+  @media (max-width: 1180px) {
+    .exam-form-main {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .exam-form-main > :last-child {
+      grid-column: 1 / -1;
+    }
+
+    .exam-form-details {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 720px) {
+    .exam-form-main,
+    .exam-form-details {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .reward-toggle {
     @apply inline-flex min-h-11 items-center gap-2 rounded-lg border-2 border-slate-100 bg-white px-3 font-black text-slate-700 shadow-sm transition;
   }
@@ -132,6 +174,14 @@ button:disabled {
 
   .exam-card {
     @apply flex min-h-44 flex-col justify-between gap-3 rounded-[24px] bg-white p-4 shadow-soft;
+  }
+
+  .exam-card-footer {
+    @apply flex items-end justify-between gap-3;
+  }
+
+  .exam-card-meta {
+    @apply flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-sm font-bold text-slate-500;
   }
 
   .score-ring {

@@ -982,7 +982,7 @@ function App() {
             <div className="space-y-5">
               <Header title="成绩记录" subtitle="记录考试，也看见一点点进步。" />
               <Panel title="添加成绩">
-                <div className="grid gap-3 lg:grid-cols-[120px_140px_120px_120px_1fr]">
+                <div className="exam-form-main">
                   <select className="input" value={examDraft.subject} onChange={(event) => setExamDraft({ ...examDraft, subject: event.target.value })}>
                     {subjects.map((subject) => (
                       <option key={subject.id}>{subject.name}</option>
@@ -1005,13 +1005,13 @@ function App() {
                   </select>
                   <input className="input" placeholder="考试名称" value={examDraft.examName} onChange={(event) => setExamDraft({ ...examDraft, examName: event.target.value })} />
                 </div>
-                <div className="mt-3 grid gap-3 lg:grid-cols-[120px_120px_120px_120px_120px_120px]">
-                  <NumberInput value={examDraft.score} onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
-                  <NumberInput value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
-                  <NumberInput value={examDraft.classRank} suffix="班级名次" onChange={(value) => setExamDraft({ ...examDraft, classRank: value })} />
-                  <NumberInput value={examDraft.rewardPoints} suffix="积分" onChange={(value) => setExamDraft({ ...examDraft, rewardPoints: value })} />
-                  <input className="input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
-                  <button className="primary-button" onClick={addExam}>
+                <div className="exam-form-details">
+                  <NumberInput className="exam-field-small" value={examDraft.score} onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
+                  <NumberInput className="exam-field-small" value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
+                  <NumberInput className="exam-field-medium" value={examDraft.classRank} suffix="班级名次" onChange={(value) => setExamDraft({ ...examDraft, classRank: value })} />
+                  <NumberInput className="exam-field-medium" value={examDraft.rewardPoints} suffix="积分" onChange={(value) => setExamDraft({ ...examDraft, rewardPoints: value })} />
+                  <input className="input exam-date-input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
+                  <button className="primary-button exam-save-button" onClick={addExam}>
                     <Save size={20} /> {editingExamId ? "更新" : "保存"}
                   </button>
                 </div>
@@ -1063,10 +1063,11 @@ function App() {
                         <span>{exam.score}<small>/{exam.totalScore}</small></span>
                       </div>
                     </div>
-                    <div className="flex items-end justify-between gap-3">
-                      <div>
-                        <p className="text-2xl font-black text-blue-600">{exam.score}<span className="text-sm text-slate-500"> / {exam.totalScore}</span></p>
-                        <p className="text-sm font-bold text-slate-500">{exam.examDate}{exam.classRank ? ` · 班级第 ${exam.classRank} 名` : ""}</p>
+                    <div className="exam-card-footer">
+                      <div className="exam-card-meta">
+                        <span>{exam.examDate}</span>
+                        {exam.classRank ? <span>班级第 {exam.classRank} 名</span> : null}
+                        {exam.rewardPoints ? <span>积分 +{exam.rewardPoints}</span> : null}
                       </div>
                       <div className="flex gap-2">
                         <button className="icon-button" onClick={() => editExam(exam)} aria-label="修改成绩">
@@ -1096,8 +1097,8 @@ function App() {
                         <YAxis dataKey="subject" type="category" width={56} />
                         <Tooltip />
                         <Legend />
-                        <Bar dataKey="planned" fill="#93c5fd" name="计划用时" radius={[0, 10, 10, 0]} />
-                        <Bar dataKey="minutes" fill="#16a34a" name="实际用时" radius={[0, 10, 10, 0]} />
+                        <Bar dataKey="planned" fill="#60a5fa" name="计划用时" radius={[0, 10, 10, 0]} />
+                        <Bar dataKey="minutes" fill="#f59e0b" name="实际用时" radius={[0, 10, 10, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </ChartBox>
@@ -1110,7 +1111,7 @@ function App() {
                         <XAxis dataKey="date" />
                         <YAxis />
                         <Tooltip />
-                        <Bar dataKey="minutes" fill="#16a34a" radius={[10, 10, 0, 0]} />
+                        <Bar dataKey="minutes" fill="#14b8a6" radius={[10, 10, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </ChartBox>
@@ -1383,9 +1384,9 @@ function EmptyText({ text }: { text: string }) {
   return <p className="rounded-2xl bg-slate-50 p-4 text-slate-500">{text}</p>;
 }
 
-function NumberInput({ value, onChange, suffix }: { value: number; onChange: (value: number) => void; suffix?: string }) {
+function NumberInput({ value, onChange, suffix, className = "" }: { value: number; onChange: (value: number) => void; suffix?: string; className?: string }) {
   return (
-    <label className="input flex items-center gap-2">
+    <label className={`input flex items-center gap-2 ${className}`}>
       <input className="w-full bg-transparent outline-none" type="number" min="0" value={value} onChange={(event) => onChange(Number(event.target.value))} />
       {suffix && <span className="shrink-0 text-sm text-slate-500">{suffix}</span>}
     </label>
