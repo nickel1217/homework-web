@@ -1,7 +1,11 @@
 import { db } from "./db";
 import type { BackupData } from "./types";
 
-export async function createBackup(): Promise<BackupData> {
+type BackupOptions = {
+  includeSecrets?: boolean;
+};
+
+export async function createBackup(options: BackupOptions = {}): Promise<BackupData> {
   const [tasks, exams, badges, rewards, settings, ledger] = await Promise.all([
     db.tasks.toArray(),
     db.exams.toArray(),
@@ -16,7 +20,7 @@ export async function createBackup(): Promise<BackupData> {
     exams,
     badges,
     rewards,
-    settings,
+    settings: options.includeSecrets === false ? stripSecrets(settings) : settings,
     ledger,
     exportedAt: new Date().toISOString(),
   };
@@ -43,5 +47,19 @@ export async function restoreBackup(data: BackupData, mode: "overwrite" | "merge
       db.settings.bulkPut(data.settings ?? []),
       db.ledger.bulkPut(data.ledger ?? []),
     ]);
+  });
+}
+
+function stripSecrets(settings: BackupData["settings"]) {
+  return settings.map((item) => {
+    if (item.baiduOcr?.mode !== "local") return item;
+    return {
+      ...item,
+      baiduOcr: {
+        mode: "local" as const,
+        apiKey: "",
+        secretKey: "",
+      },
+    };
   });
 }

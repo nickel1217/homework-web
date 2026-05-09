@@ -36,6 +36,15 @@ import {
 import { createBackup, restoreBackup } from "./backup";
 import { addLedger, db, ensureSeedData, getPointBalance, refreshBadges } from "./db";
 import { recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
+import {
+  downloadCloudBackup,
+  getCurrentSession,
+  onAuthChange,
+  signInWithPassword,
+  signOut,
+  signUpWithPassword,
+  uploadCloudBackup,
+} from "./supabase";
 import type { AppSettings, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
 
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "settings";
@@ -111,6 +120,11 @@ function App() {
     childName: "小朋友",
     baiduOcr: { mode: "local", apiKey: "", secretKey: "" },
   });
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authUserEmail, setAuthUserEmail] = useState("");
+  const [syncStatus, setSyncStatus] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const load = async () => {
     await ensureSeedData();
@@ -129,6 +143,12 @@ function App() {
 
   useEffect(() => {
     void load();
+  }, []);
+
+  useEffect(() => {
+    void getCurrentSession().then((session) => setAuthUserEmail(session?.user.email ?? ""));
+    const { data } = onAuthChange((session) => setAuthUserEmail(session?.user.email ?? ""));
+    return () => data.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -245,6 +265,54 @@ function App() {
     await restoreBackup(JSON.parse(text), mode);
     await load();
   };
+
+  const runSync = async (action: () => Promise<string>) => {
+    setIsSyncing(true);
+    setSyncStatus("正在同步...");
+    try {
+      setSyncStatus(await action());
+    } catch (error) {
+      setSyncStatus(error instanceof Error ? error.message : "同步失败");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const signIn = () =>
+    runSync(async () => {
+      const session = await signInWithPassword(authEmail.trim(), authPassword);
+      setAuthUserEmail(session?.user.email ?? authEmail.trim());
+      return "登录成功";
+    });
+
+  const signUp = () =>
+    runSync(async () => {
+      const session = await signUpWithPassword(authEmail.trim(), authPassword);
+      return session ? "注册成功，已登录" : "注册成功，请按 Supabase 邮件设置完成验证后再登录";
+    });
+
+  const logout = () =>
+    runSync(async () => {
+      await signOut();
+      setAuthUserEmail("");
+      return "已退出登录";
+    });
+
+  const uploadToCloud = () =>
+    runSync(async () => {
+      const backup = await createBackup({ includeSecrets: false });
+      await uploadCloudBackup(backup);
+      return "已上传到 Supabase。百度 OCR 密钥没有上传。";
+    });
+
+  const restoreFromCloud = (mode: "overwrite" | "merge") =>
+    runSync(async () => {
+      const cloudBackup = await downloadCloudBackup();
+      if (!cloudBackup) return "云端还没有备份";
+      await restoreBackup(cloudBackup.backup_data, mode);
+      await load();
+      return mode === "overwrite" ? "已用云端备份覆盖本地数据" : "已合并云端备份到本地";
+    });
 
   const saveSettings = async () => {
     await db.settings.put(settingsDraft);
@@ -575,6 +643,44 @@ function App() {
                     <RotateCcw size={20} /> 覆盖导入
                     <input className="hidden" type="file" accept="application/json" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0], "overwrite")} />
                   </label>
+                </div>
+              </Panel>
+              <Panel title="Supabase 云同步">
+                <div className="space-y-4">
+                  <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">
+                    当前模式是本地优先：平时使用 IndexedDB，点击按钮时把学习数据同步到 Supabase。百度 OCR 密钥不会上传。
+                  </p>
+                  {authUserEmail ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-2xl bg-green-50 px-4 py-3 font-black text-green-700">已登录：{authUserEmail}</span>
+                      <button className="secondary-button" disabled={isSyncing} onClick={logout}>
+                        退出
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 lg:grid-cols-[1fr_1fr_120px_120px]">
+                      <input className="input" type="email" placeholder="邮箱" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
+                      <input className="input" type="password" placeholder="密码" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} />
+                      <button className="primary-button" disabled={isSyncing || !authEmail || !authPassword} onClick={signIn}>
+                        登录
+                      </button>
+                      <button className="secondary-button" disabled={isSyncing || !authEmail || !authPassword} onClick={signUp}>
+                        注册
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-3">
+                    <button className="primary-button" disabled={isSyncing || !authUserEmail} onClick={uploadToCloud}>
+                      {isSyncing ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />} 上传到云端
+                    </button>
+                    <button className="secondary-button" disabled={isSyncing || !authUserEmail} onClick={() => restoreFromCloud("merge")}>
+                      <Download size={20} /> 从云端合并
+                    </button>
+                    <button className="danger-button" disabled={isSyncing || !authUserEmail} onClick={() => restoreFromCloud("overwrite")}>
+                      <RotateCcw size={20} /> 云端覆盖本地
+                    </button>
+                  </div>
+                  {syncStatus && <p className="rounded-2xl bg-slate-50 p-4 font-bold text-slate-700">{syncStatus}</p>}
                 </div>
               </Panel>
               <Panel title="百度云 OCR">
