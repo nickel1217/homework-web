@@ -127,6 +127,9 @@ function App() {
     points: 0,
   });
   const [taskDraft, setTaskDraft] = useState(emptyTask());
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [selectedTaskDate, setSelectedTaskDate] = useState(today());
+  const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
   const [examDraft, setExamDraft] = useState({
     subject: "数学",
     examName: "",
@@ -231,12 +234,14 @@ function App() {
     return () => window.clearInterval(interval);
   }, [state.tasks]);
 
-  const todayTasks = state.tasks.filter((task) => task.startDate === today());
+  const todayTasks = state.tasks.filter((task) => taskOverlapsDate(task, today()));
   const subjects = state.subjects.length > 0 ? state.subjects : fallbackSubjects;
   const visibleSubjects = subjects.filter((subject) => subject.showOnHome);
   const completedToday = todayTasks.filter((task) => task.status === "completed");
   const studyMinutesToday = todayTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
   const completionRate = todayTasks.length === 0 ? 0 : Math.round((completedToday.length / todayTasks.length) * 100);
+  const filteredTasks = state.tasks.filter((task) => taskOverlapsDate(task, selectedTaskDate) && (!hideCompletedTasks || task.status !== "completed"));
+  const selectedDateCompleted = filteredTasks.filter((task) => task.status === "completed").length;
 
   const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
 
@@ -262,8 +267,11 @@ function App() {
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
-    await addCloudTask(familyCode, { ...taskDraft, id: crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: nowIso() });
+    const task = { ...taskDraft, id: editingTaskId ?? crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: editingTaskId ? state.tasks.find((item) => item.id === editingTaskId)?.createdAt ?? nowIso() : nowIso() };
+    if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, task);
+    else await addCloudTask(familyCode, task);
     setTaskDraft(emptyTask());
+    setEditingTaskId(null);
     await load();
   };
 
@@ -285,10 +293,37 @@ function App() {
     await load();
   };
 
+  const editTask = (task: Task) => {
+    setEditingTaskId(task.id);
+    setTaskDraft({
+      category: task.category,
+      title: task.title,
+      description: task.description ?? "",
+      plannedMinutes: task.plannedMinutes ?? 30,
+      actualMinutes: task.actualMinutes ?? 0,
+      startTime: task.startTime,
+      endTime: task.endTime,
+      status: task.status,
+      repeatType: task.repeatType,
+      repeatDays: task.repeatDays,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      autoComplete: task.autoComplete,
+      rewardPoints: task.rewardPoints,
+      penaltyPoints: task.penaltyPoints,
+      overduePoints: task.overduePoints,
+    });
+  };
+
+  const cancelTaskEdit = () => {
+    setEditingTaskId(null);
+    setTaskDraft(emptyTask());
+  };
+
   const startTask = async (task: Task) => {
     setBusyTaskId(task.id);
     try {
-      const startTime = task.startTime ?? nowIso();
+      const startTime = nowIso();
       await updateCloudTask(familyCode, task.id, { status: "running", startTime });
       setState((current) => ({
         ...current,
@@ -303,13 +338,32 @@ function App() {
     }
   };
 
+  const pauseTask = async (task: Task) => {
+    setBusyTaskId(task.id);
+    try {
+      const elapsed = task.status === "running" && task.startTime ? Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000)) : 0;
+      const actualMinutes = (task.actualMinutes ?? 0) + elapsed;
+      await updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+      setState((current) => ({
+        ...current,
+        tasks: current.tasks.map((item) => (item.id === task.id ? { ...item, status: "paused", startTime: undefined, actualMinutes } : item)),
+      }));
+      setCloudStatus(`已暂停：${task.title}`);
+      await load();
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "任务暂停失败");
+    } finally {
+      setBusyTaskId(null);
+    }
+  };
+
   const completeTask = async (task: Task) => {
     if (task.status === "completed") return;
     setBusyTaskId(task.id);
     try {
       const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
       const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
-      const actualMinutes = Math.max(task.actualMinutes ?? 0, task.status === "running" ? elapsed : task.actualMinutes ?? task.plannedMinutes ?? 1);
+      const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : Math.max(task.actualMinutes ?? 0, task.plannedMinutes ?? 1);
       await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
       await addCloudLedger(familyCode, "earn", 1, `按时完成作业：${task.title}`);
       setCloudStatus(`已完成：${task.title}，+1 分`);
@@ -581,7 +635,7 @@ function App() {
           {activeTab === "tasks" && (
             <div className="space-y-5">
               <Header title="学习计划" subtitle="少输入，多点击，任务完成马上得积分。" />
-              <Panel title="添加任务">
+              <Panel title={editingTaskId ? "设置作业" : "添加任务"}>
                 <div className="grid gap-3 lg:grid-cols-[140px_1fr_120px_140px]">
                   <select className="input" value={taskDraft.category} onChange={(event) => setTaskDraft({ ...taskDraft, category: event.target.value })}>
                     {subjects.map((subject) => (
@@ -599,6 +653,16 @@ function App() {
                     <option value="daily">每天</option>
                     <option value="weekly">每周</option>
                   </select>
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <label className="input flex items-center gap-3">
+                    <span className="shrink-0 text-sm text-slate-500">开始日期</span>
+                    <input className="w-full bg-transparent outline-none" type="date" value={taskDraft.startDate} onChange={(event) => setTaskDraft({ ...taskDraft, startDate: event.target.value })} />
+                  </label>
+                  <label className="input flex items-center gap-3">
+                    <span className="shrink-0 text-sm text-slate-500">完成日期</span>
+                    <input className="w-full bg-transparent outline-none" type="date" value={taskDraft.endDate ?? ""} onChange={(event) => setTaskDraft({ ...taskDraft, endDate: event.target.value || undefined })} />
+                  </label>
                 </div>
                 {taskDraft.repeatType === "weekly" && (
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -623,11 +687,18 @@ function App() {
                 )}
                 <div className="mt-3 flex flex-wrap gap-3">
                   <button className="primary-button" onClick={addTask}>
-                    <Plus size={20} /> 添加
+                    {editingTaskId ? <Save size={20} /> : <Plus size={20} />} {editingTaskId ? "保存设置" : "添加"}
                   </button>
-                  <button className="secondary-button" onClick={addRepeatTask}>
-                    <Repeat size={20} /> 每天任务
-                  </button>
+                  {!editingTaskId && (
+                    <button className="secondary-button" onClick={addRepeatTask}>
+                      <Repeat size={20} /> 每天任务
+                    </button>
+                  )}
+                  {editingTaskId && (
+                    <button className="secondary-button" onClick={cancelTaskEdit}>
+                      取消
+                    </button>
+                  )}
                 </div>
               </Panel>
               <Panel title="OCR 识别作业">
@@ -672,28 +743,55 @@ function App() {
                   )}
                 </div>
               </Panel>
+              <Panel title="历史作业查询">
+                <div className="grid gap-3 lg:grid-cols-[1fr_180px_180px]">
+                  <label className="input flex items-center gap-3">
+                    <span className="shrink-0 text-sm text-slate-500">查询日期</span>
+                    <input className="w-full bg-transparent outline-none" type="date" value={selectedTaskDate} onChange={(event) => setSelectedTaskDate(event.target.value)} />
+                  </label>
+                  <button className="secondary-button" onClick={() => setSelectedTaskDate(today())}>
+                    今天
+                  </button>
+                  <button className={hideCompletedTasks ? "primary-button" : "secondary-button"} onClick={() => setHideCompletedTasks((value) => !value)}>
+                    {hideCompletedTasks ? "显示已完成" : "隐藏已完成"}
+                  </button>
+                </div>
+                <p className="mt-3 rounded-2xl bg-slate-50 p-4 font-bold text-slate-600">
+                  {selectedTaskDate} 有 {filteredTasks.length} 个作业，已完成 {selectedDateCompleted} 个。跨日作业会显示在开始日期到完成日期之间的每一天。
+                </p>
+              </Panel>
               <div className="grid gap-4 xl:grid-cols-2">
-                {state.tasks.map((task) => (
+                {filteredTasks.map((task) => (
                   <article className={`task-card ${task.status === "completed" ? "task-done" : ""}`} key={task.id}>
                     <div>
                       <div className="flex flex-wrap gap-2">
                         <span className="pill" style={{ backgroundColor: `${getSubjectColor(subjects, task.category)}22`, color: getSubjectColor(subjects, task.category) }}>
                           {task.category}
                         </span>
-                        <span className={`pill ${task.status === "running" ? "status-running" : task.status === "completed" ? "status-completed" : "status-pending"}`}>
-                          {task.status === "running" ? "进行中" : task.status === "completed" ? "已完成" : "未开始"}
+                        <span className={`pill ${getTaskStatusClass(task.status)}`}>
+                          {getTaskStatusLabel(task.status)}
                         </span>
                       </div>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
-                      <p className="mt-2 text-slate-600">计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {task.actualMinutes ?? 0} 分钟 · 按时完成 +1 分</p>
+                      <p className="mt-2 text-slate-600">
+                        计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {getTaskElapsedMinutes(task)} 分钟 · 按时完成 +1 分
+                      </p>
+                      <p className="mt-1 text-sm font-bold text-slate-500">
+                        作业日期 {formatTaskDateRange(task)} · 创建于 {task.createdAt.slice(0, 10)}
+                      </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {task.status !== "completed" && (
                         <>
-                          <button className={task.status === "running" ? "primary-button" : "secondary-button"} disabled={busyTaskId === task.id} onClick={() => startTask(task)}>
+                          <button className={task.status === "running" ? "primary-button" : "secondary-button"} disabled={busyTaskId === task.id || task.status === "running"} onClick={() => startTask(task)}>
                             {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Clock size={20} />}
-                            {task.status === "running" ? "已开始" : "开始"}
+                            {task.status === "paused" ? "继续" : task.status === "running" ? "已开始" : "开始"}
                           </button>
+                          {task.status === "running" && (
+                            <button className="secondary-button" disabled={busyTaskId === task.id} onClick={() => pauseTask(task)}>
+                              {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Clock size={20} />} 暂停
+                            </button>
+                          )}
                           <button className="secondary-button" onClick={() => setFocusTask(task)}>
                             <Target size={20} /> 专注
                           </button>
@@ -702,12 +800,16 @@ function App() {
                           </button>
                         </>
                       )}
+                      <button className="secondary-button" onClick={() => editTask(task)}>
+                        设置
+                      </button>
                       <button className="icon-button" onClick={() => deleteTask(task.id)} aria-label="删除任务">
                         <Trash2 size={20} />
                       </button>
                     </div>
                   </article>
                 ))}
+                {filteredTasks.length === 0 && <EmptyText text="这一天没有需要显示的作业。" />}
               </div>
             </div>
           )}
@@ -926,12 +1028,14 @@ function App() {
                     value={normalizeOcrSettings(settingsDraft.baiduOcr)?.proxyUrl ?? DEFAULT_OCR_PROXY_URL}
                     onChange={(event) => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: event.target.value || DEFAULT_OCR_PROXY_URL } })}
                   />
-                  <button className="primary-button" onClick={saveSettings}>
-                    <Save size={20} /> 保存 OCR 配置
-                  </button>
-                  <button className="secondary-button" onClick={testOcrSettings}>
-                    测试 OCR 配置
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button className="primary-button" onClick={saveSettings}>
+                      <Save size={20} /> 保存 OCR 配置
+                    </button>
+                    <button className="secondary-button" onClick={testOcrSettings}>
+                      测试 OCR 配置
+                    </button>
+                  </div>
                   {ocrWarning && <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">{ocrWarning}</p>}
                 </div>
               </Panel>
@@ -960,7 +1064,18 @@ function App() {
                     setFocusTask({ ...focusTask, status: "running", startTime: nowIso() });
                   }}
                 >
-                  <Clock size={20} /> 开始专注
+                  <Clock size={20} /> {focusTask.status === "paused" ? "继续专注" : "开始专注"}
+                </button>
+              )}
+              {focusTask.status === "running" && (
+                <button
+                  className="secondary-button"
+                  onClick={async () => {
+                    await pauseTask(focusTask);
+                    setFocusTask({ ...focusTask, status: "paused", actualMinutes: getTaskElapsedMinutes(focusTask), startTime: undefined });
+                  }}
+                >
+                  <Clock size={20} /> 暂停
                 </button>
               )}
               <button
@@ -1031,9 +1146,34 @@ function NumberInput({ value, onChange, suffix }: { value: number; onChange: (va
 
 function getTaskElapsedMinutes(task: Task) {
   if (task.status === "running" && task.startTime) {
-    return Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
+    return (task.actualMinutes ?? 0) + Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
   }
   return task.actualMinutes ?? 0;
+}
+
+function taskOverlapsDate(task: Task, date: string) {
+  const endDate = task.endDate || task.startDate;
+  return task.startDate <= date && date <= endDate;
+}
+
+function formatTaskDateRange(task: Task) {
+  if (!task.endDate || task.endDate === task.startDate) return task.startDate;
+  return `${task.startDate} 至 ${task.endDate}`;
+}
+
+function getTaskStatusLabel(status: Task["status"]) {
+  if (status === "running") return "进行中";
+  if (status === "paused") return "已暂停";
+  if (status === "completed") return "已完成";
+  if (status === "expired") return "已过期";
+  return "未开始";
+}
+
+function getTaskStatusClass(status: Task["status"]) {
+  if (status === "running") return "status-running";
+  if (status === "paused") return "status-paused";
+  if (status === "completed") return "status-completed";
+  return "status-pending";
 }
 
 function getSubjectColor(subjects: Subject[], name: string) {

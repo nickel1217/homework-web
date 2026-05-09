@@ -37,7 +37,7 @@ export async function recognizeHomeworkWithBaidu(file: File, config: BaiduOcrCon
     detect_direction: "true",
     paragraph: "false",
   });
-  const response = await fetch(`https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${encodeURIComponent(token)}`, {
+  const response = await fetch(`https://aip.baidubce.com/rest/2.0/ocr/v1/handwriting?access_token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,

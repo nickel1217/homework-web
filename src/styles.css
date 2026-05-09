@@ -118,6 +118,10 @@ button:disabled {
     @apply bg-yellow-100 text-yellow-700;
   }
 
+  .status-paused {
+    @apply bg-orange-100 text-orange-700;
+  }
+
   .status-completed {
     @apply bg-green-100 text-green-700;
   }

@@ -1,4 +1,4 @@
-export type TaskStatus = "pending" | "running" | "completed" | "expired";
+export type TaskStatus = "pending" | "running" | "paused" | "completed" | "expired";
 export type RepeatType = "none" | "daily" | "weekly";
 
 export type Task = {

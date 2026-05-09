@@ -47,7 +47,7 @@ Deno.serve(async (request) => {
       paragraph: "false",
     });
 
-    const ocrResponse = await fetch(`https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${encodeURIComponent(accessToken)}`, {
+    const ocrResponse = await fetch(`https://aip.baidubce.com/rest/2.0/ocr/v1/handwriting?access_token=${encodeURIComponent(accessToken)}`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
