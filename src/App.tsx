@@ -6,6 +6,7 @@ import {
   Download,
   Gift,
   Home,
+  Loader2,
   Medal,
   Plus,
   RotateCcw,
@@ -34,6 +35,7 @@ import {
 } from "recharts";
 import { createBackup, restoreBackup } from "./backup";
 import { addLedger, db, ensureSeedData, getPointBalance, refreshBadges } from "./db";
+import { recognizeHomeworkWithBaidu, type OcrDraftTask } from "./ocr";
 import type { AppSettings, Badge, ExamRecord, PointLedger, Reward, Task } from "./types";
 
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "settings";
@@ -101,6 +103,14 @@ function App() {
     examDate: today(),
   });
   const [ocrWarning, setOcrWarning] = useState("");
+  const [ocrStatus, setOcrStatus] = useState("");
+  const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
+  const [isRecognizing, setIsRecognizing] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
+    id: "default",
+    childName: "小朋友",
+    baiduOcr: { mode: "local", apiKey: "", secretKey: "" },
+  });
 
   const load = async () => {
     await ensureSeedData();
@@ -120,6 +130,15 @@ function App() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (state.settings) {
+      setSettingsDraft({
+        ...state.settings,
+        baiduOcr: state.settings.baiduOcr ?? { mode: "local", apiKey: "", secretKey: "" },
+      });
+    }
+  }, [state.settings]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -227,6 +246,57 @@ function App() {
     await load();
   };
 
+  const saveSettings = async () => {
+    await db.settings.put(settingsDraft);
+    setOcrWarning("设置已保存到当前浏览器。密钥不会进入 GitHub 仓库。");
+    await load();
+  };
+
+  const recognizeImage = async (file: File) => {
+    const config = state.settings?.baiduOcr;
+    if (!config) {
+      setOcrStatus("请先到设置页保存百度云 OCR 配置。");
+      return;
+    }
+    if (config.mode === "local" && (!config.apiKey || !config.secretKey)) {
+      setOcrStatus("请先填写 API Key 和 Secret Key。");
+      return;
+    }
+    if (config.mode === "proxy" && !config.proxyUrl) {
+      setOcrStatus("请先填写 OCR 代理接口 URL。");
+      return;
+    }
+    const ocrConfig =
+      config.mode === "local"
+        ? { mode: "local" as const, apiKey: config.apiKey ?? "", secretKey: config.secretKey ?? "" }
+        : { mode: "proxy" as const, proxyUrl: config.proxyUrl ?? "" };
+
+    setIsRecognizing(true);
+    setOcrStatus("正在识别图片...");
+    try {
+      const drafts = await recognizeHomeworkWithBaidu(file, ocrConfig);
+      setOcrDrafts(drafts);
+      setOcrStatus(drafts.length > 0 ? `识别到 ${drafts.length} 条内容，请确认后添加。` : "没有识别到可用文字。");
+    } catch (error) {
+      setOcrStatus(error instanceof Error ? error.message : "OCR 识别失败");
+    } finally {
+      setIsRecognizing(false);
+    }
+  };
+
+  const addOcrDraft = async (draft: OcrDraftTask) => {
+    await db.tasks.add({
+      ...emptyTask(),
+      id: crypto.randomUUID(),
+      category: draft.category,
+      title: draft.title,
+      description: draft.description,
+      createdAt: nowIso(),
+    });
+    setOcrDrafts((items) => items.filter((item) => item !== draft));
+    await load();
+  };
+
   return (
     <main className="min-h-screen bg-[#f6f8ff] text-slate-900">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-4 lg:flex-row lg:px-6">
@@ -315,6 +385,32 @@ function App() {
                   <button className="primary-button" onClick={addTask}>
                     <Plus size={20} /> 添加
                   </button>
+                </div>
+              </Panel>
+              <Panel title="OCR 识别作业">
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="secondary-button cursor-pointer">
+                      {isRecognizing ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />} 上传作业图片
+                      <input className="hidden" type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && void recognizeImage(event.target.files[0])} />
+                    </label>
+                    {ocrStatus && <span className="font-bold text-slate-600">{ocrStatus}</span>}
+                  </div>
+                  {ocrDrafts.length > 0 && (
+                    <div className="grid gap-3">
+                      {ocrDrafts.map((draft, index) => (
+                        <div className="ocr-row" key={`${draft.title}-${index}`}>
+                          <div>
+                            <span className="pill">{draft.category}</span>
+                            <p className="mt-2 text-lg font-black">{draft.title}</p>
+                          </div>
+                          <button className="primary-button" onClick={() => addOcrDraft(draft)}>
+                            <Plus size={20} /> 添加
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </Panel>
               <div className="grid gap-4 xl:grid-cols-2">
@@ -482,12 +578,54 @@ function App() {
                 </div>
               </Panel>
               <Panel title="百度云 OCR">
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <p className="rounded-2xl bg-yellow-50 p-4 text-yellow-900">
-                    OCR 将在 P1 接入百度云。GitHub Pages 纯前端无法安全保护 Secret Key，推荐使用你自己的代理或云函数保存密钥。
+                    GitHub Pages 纯前端无法安全保护 Secret Key。这里的配置只保存在当前浏览器，用于家庭自用；更推荐使用代理接口模式。
                   </p>
-                  <button className="secondary-button" onClick={() => setOcrWarning("需要提供：百度云 OCR API Key、Secret Key；更推荐提供一个你自己的 OCR 代理接口 URL。")}>
-                    查看需要的信息
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className={settingsDraft.baiduOcr?.mode === "local" ? "primary-button" : "secondary-button"}
+                      onClick={() => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: "", secretKey: "" } })}
+                    >
+                      本地密钥
+                    </button>
+                    <button
+                      className={settingsDraft.baiduOcr?.mode === "proxy" ? "primary-button" : "secondary-button"}
+                      onClick={() => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: "" } })}
+                    >
+                      代理接口
+                    </button>
+                  </div>
+                  {settingsDraft.baiduOcr?.mode === "local" ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input
+                        className="input"
+                        placeholder="百度云 API Key"
+                        value={settingsDraft.baiduOcr.apiKey ?? ""}
+                        onChange={(event) =>
+                          setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: event.target.value, secretKey: settingsDraft.baiduOcr?.secretKey ?? "" } })
+                        }
+                      />
+                      <input
+                        className="input"
+                        placeholder="百度云 Secret Key"
+                        type="password"
+                        value={settingsDraft.baiduOcr.secretKey ?? ""}
+                        onChange={(event) =>
+                          setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "local", apiKey: settingsDraft.baiduOcr?.apiKey ?? "", secretKey: event.target.value } })
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      className="input w-full"
+                      placeholder="https://你的域名/ocr-proxy"
+                      value={settingsDraft.baiduOcr?.proxyUrl ?? ""}
+                      onChange={(event) => setSettingsDraft({ ...settingsDraft, baiduOcr: { mode: "proxy", proxyUrl: event.target.value } })}
+                    />
+                  )}
+                  <button className="primary-button" onClick={saveSettings}>
+                    <Save size={20} /> 保存 OCR 配置
                   </button>
                   {ocrWarning && <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">{ocrWarning}</p>}
                 </div>
