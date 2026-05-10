@@ -261,36 +261,33 @@ function App() {
 
   const ensureRepeatInstances = async (tasks: Task[]) => {
     const todayDate = today();
-    const weekday = parseLocalDate(todayDate).getDay();
     const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
-    const dueTemplates = tasks.filter((task) => {
-      if (task.startDate >= todayDate) return false;
-      if (task.repeatType === "daily") return true;
-      if (task.repeatType === "weekly") return task.repeatDays?.includes(weekday);
-      return false;
-    });
-    const creates = dueTemplates
-      .filter((task) => !existingKeys.has(`${todayDate}::${task.category}::${task.title}`))
-      .map((task) =>
-        addCloudTask(familyCode, {
+    const creates = tasks.flatMap((task) => {
+      return getRepeatOccurrenceDates(task, todayDate).flatMap((date) => {
+        const occurrenceKey = `${date}::${task.category}::${task.title}`;
+        if (existingKeys.has(occurrenceKey)) return [];
+        existingKeys.add(occurrenceKey);
+        return addCloudTask(familyCode, {
           ...task,
-          id: crypto.randomUUID(),
+          id: getRepeatInstanceId(task, date),
           status: "pending",
           actualMinutes: 0,
           startTime: undefined,
           endTime: undefined,
           repeatType: "none",
           repeatDays: undefined,
-          startDate: todayDate,
+          startDate: date,
+          endDate: undefined,
           createdAt: nowIso(),
-        }),
-      );
+        });
+      });
+    });
     await Promise.all(creates);
   };
 
   const applyOverduePenalties = async (tasks: Task[]) => {
     const todayDate = today();
-    const overdueTasks = tasks.filter((task) => task.autoComplete && task.status !== "completed" && task.status !== "expired" && (task.endDate || task.startDate) < todayDate);
+    const overdueTasks = tasks.filter((task) => task.autoComplete && task.status !== "completed" && task.status !== "expired" && getTaskDueDate(task) < todayDate);
     await Promise.all(
       overdueTasks.map(async (task) => {
         await updateCloudTask(familyCode, task.id, { status: "expired" });
@@ -1705,12 +1702,35 @@ function getElapsedWholeMinutes(startedAt: number) {
 }
 
 function taskOverlapsDate(task: Task, date: string) {
+  if (task.repeatType !== "none") return task.startDate === date;
   const endDate = task.endDate || task.startDate;
   return task.startDate <= date && date <= endDate;
 }
 
 function isTaskOverdue(task: Task) {
-  return (task.endDate || task.startDate) < today();
+  return getTaskDueDate(task) < today();
+}
+
+function getTaskDueDate(task: Task) {
+  return task.repeatType !== "none" ? task.startDate : task.endDate || task.startDate;
+}
+
+function getRepeatOccurrenceDates(task: Task, todayDate: string) {
+  if (task.repeatType === "none") return [];
+  const endDate = task.endDate || todayDate;
+  if (endDate <= task.startDate) return [];
+  const dates: string[] = [];
+  for (let date = addLocalDays(task.startDate, 1); date <= endDate; date = addLocalDays(date, 1)) {
+    const mondayFirstWeekday = (parseLocalDate(date).getDay() + 6) % 7;
+    if (task.repeatType === "daily" || task.repeatDays?.includes(mondayFirstWeekday)) {
+      dates.push(date);
+    }
+  }
+  return dates;
+}
+
+function getRepeatInstanceId(task: Task, date: string) {
+  return `repeat:${task.id}:${date}`;
 }
 
 function toLocalDateInputValue(date: Date) {
