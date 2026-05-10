@@ -485,7 +485,7 @@ function App() {
   const pauseTask = async (task: Task) => {
     setBusyTaskId(task.id);
     try {
-      const elapsed = task.status === "running" && task.startTime ? Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000)) : 0;
+      const elapsed = getTaskRunMinutes(task);
       const actualMinutes = (task.actualMinutes ?? 0) + elapsed;
       await updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
       setState((current) => ({
@@ -506,7 +506,7 @@ function App() {
     setBusyTaskId(task.id);
     try {
       const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
-      const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
+      const elapsed = getElapsedWholeMinutes(startedAt);
       const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : (task.actualMinutes ?? 0);
       const points = task.autoComplete ? (isTaskOverdue(task) ? task.overduePoints : task.rewardPoints) : 0;
       await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
@@ -816,8 +816,14 @@ function App() {
               const Icon = tab.icon;
               return (
                 <button
+                  type="button"
                   key={tab.id}
                   className={`nav-button ${activeTab === tab.id ? "nav-button-active" : ""}`}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    setActiveTab(tab.id);
+                  }}
                   onClick={() => setActiveTab(tab.id)}
                 >
                   <Icon size={22} />
@@ -1682,9 +1688,20 @@ function getBadgeConditionLabel(conditionType: string) {
 
 function getTaskElapsedMinutes(task: Task) {
   if (task.status === "running" && task.startTime) {
-    return (task.actualMinutes ?? 0) + Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
+    return (task.actualMinutes ?? 0) + getTaskRunMinutes(task);
   }
   return task.actualMinutes ?? 0;
+}
+
+function getTaskRunMinutes(task: Task) {
+  if (task.status !== "running" || !task.startTime) return 0;
+  const startedAt = new Date(task.startTime).getTime();
+  return getElapsedWholeMinutes(startedAt);
+}
+
+function getElapsedWholeMinutes(startedAt: number) {
+  if (Number.isNaN(startedAt)) return 0;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 60000));
 }
 
 function taskOverlapsDate(task: Task, date: string) {
