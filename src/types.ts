@@ -80,6 +80,7 @@ export type AppSettings = {
   id: string;
   childName: string;
   parentPassword?: string;
+  badgeStartDate?: string;
   baiduOcr?: {
     mode: "proxy" | "local";
     proxyUrl?: string;

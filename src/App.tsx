@@ -2,6 +2,7 @@ import {
   Award,
   BarChart3,
   BookOpen,
+  CalendarCheck,
   CheckCircle2,
   Clock,
   Cookie,
@@ -22,6 +23,7 @@ import {
   Save,
   Settings,
   Sparkles,
+  Star,
   Target,
   Ticket,
   Timer,
@@ -52,6 +54,7 @@ import {
   addCloudLedger,
   addCloudTask,
   DEFAULT_FAMILY_CODE,
+  deleteCloudBadge,
   deleteCloudLedger,
   deleteCloudReward,
   deleteCloudTask,
@@ -65,6 +68,7 @@ import {
   deleteCloudExam,
   deleteCloudSubject,
   updateCloudExam,
+  upsertCloudBadge,
   upsertCloudSubject,
   upsertCloudReward,
 } from "./supabase";
@@ -111,6 +115,22 @@ const rewardIconOptions = [
   { name: "Music", label: "音乐", icon: Music },
   { name: "Ticket", label: "门票", icon: Ticket },
   { name: "Trophy", label: "挑战", icon: Trophy },
+] as const;
+const badgeIconOptions = [
+  { name: "Medal", label: "勋章", icon: Medal },
+  { name: "Star", label: "星星", icon: Star },
+  { name: "Clock", label: "时间", icon: Clock },
+  { name: "Trophy", label: "奖杯", icon: Trophy },
+  { name: "Target", label: "目标", icon: Target },
+  { name: "CalendarCheck", label: "连续", icon: CalendarCheck },
+] as const;
+const badgeConditionOptions = [
+  { value: "completedTasks", label: "累计完成作业" },
+  { value: "studyMinutes", label: "累计学习分钟" },
+  { value: "completedDays", label: "有完成记录的天数" },
+  { value: "perfectDays", label: "当天作业全部完成" },
+  { value: "examsAbove90", label: "90 分以上考试次数" },
+  { value: "examsAbove95", label: "95 分以上考试次数" },
 ] as const;
 const fallbackSubjects: Subject[] = [
   { id: "chinese", name: "语文", color: "#ef4444", showOnHome: true, sortOrder: 1 },
@@ -186,9 +206,13 @@ function App() {
   const [examGradeFilter, setExamGradeFilter] = useState("全部年级");
   const [examSemesterFilter, setExamSemesterFilter] = useState("全部学期");
   const [subjectDraft, setSubjectDraft] = useState<Subject>({ id: "", name: "", color: "#2563eb", showOnHome: true, sortOrder: 10 });
+  const [badgeDraft, setBadgeDraft] = useState<Badge>({ id: "", name: "", description: "", icon: "Medal", unlocked: false, conditionType: "completedTasks", conditionValue: 1 });
+  const [editingBadgeId, setEditingBadgeId] = useState<string | null>(null);
   const [ledgerDraft, setLedgerDraft] = useState({ reason: "", points: 0 });
   const [rewardDraft, setRewardDraft] = useState<Reward>({ id: "", title: "", description: "", pointsCost: 20, icon: "Gift", enabled: true });
   const [editingRewardId, setEditingRewardId] = useState<string | null>(null);
+  const [statsDate, setStatsDate] = useState(today());
+  const [statsRange, setStatsRange] = useState<"day" | "week" | "month">("week");
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
@@ -200,6 +224,7 @@ function App() {
     id: "default",
     childName: "小朋友",
     parentPassword: "admin",
+    badgeStartDate: today(),
     baiduOcr: loadLocalOcrSettings(),
   });
   const [cloudStatus, setCloudStatus] = useState("正在连接 Supabase...");
@@ -213,9 +238,9 @@ function App() {
       await applyOverduePenalties(data.tasks);
       await ensureRepeatInstances(data.tasks);
       const withRepeats = await fetchCloudData(familyCode);
-      await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges);
+      await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges, withRepeats.exams, withRepeats.settings?.[0]?.badgeStartDate);
       const refreshed = await fetchCloudData(familyCode);
-      const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友" };
+      const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友", badgeStartDate: today() };
       setState({
         tasks: refreshed.tasks,
         exams: refreshed.exams,
@@ -329,37 +354,35 @@ function App() {
 
   const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
 
-  const dailyStats = useMemo(() => {
-    const map = new Map<string, { date: string; minutes: number; planned: number; completed: number; total: number }>();
-    for (const task of state.tasks) {
-      const item = map.get(task.startDate) ?? { date: task.startDate.slice(5), minutes: 0, planned: 0, completed: 0, total: 0 };
+  const statsWindow = useMemo(() => getStatsWindow(statsDate, statsRange), [statsDate, statsRange]);
+  const statsTasks = useMemo(() => state.tasks.filter((task) => task.startDate >= statsWindow.start && task.startDate <= statsWindow.end), [state.tasks, statsWindow]);
+  const dailyTimeStats = useMemo(() => {
+    const map = new Map<string, { day: string; date: string; minutes: number; planned: number; completed: number; total: number }>();
+    for (const day of getDateRange(statsWindow.start, statsWindow.end)) {
+      map.set(day, { day: day.slice(5), date: day, minutes: 0, planned: 0, completed: 0, total: 0 });
+    }
+    for (const task of statsTasks) {
+      const item = map.get(task.startDate);
+      if (!item) continue;
       item.minutes += task.actualMinutes ?? 0;
       item.planned += task.plannedMinutes ?? 0;
       item.total += 1;
       if (task.status === "completed") item.completed += 1;
-      map.set(task.startDate, item);
-    }
-    return [...map.values()].slice(-10);
-  }, [state.tasks]);
-
-  const subjectTimeStats = useMemo(() => {
-    const map = new Map<string, { subject: string; minutes: number; planned: number }>();
-    for (const task of state.tasks) {
-      const item = map.get(task.category) ?? { subject: task.category, minutes: 0, planned: 0 };
-      item.minutes += task.actualMinutes ?? 0;
-      item.planned += task.plannedMinutes ?? 0;
-      map.set(task.category, item);
     }
     return [...map.values()];
-  }, [state.tasks]);
+  }, [statsTasks, statsWindow]);
+  const statsSummary = useMemo(
+    () => dailyTimeStats.reduce((sum, item) => ({ planned: sum.planned + item.planned, minutes: sum.minutes + item.minutes, completed: sum.completed + item.completed, total: sum.total + item.total }), { planned: 0, minutes: 0, completed: 0, total: 0 }),
+    [dailyTimeStats],
+  );
 
   const categoryStats = useMemo(() => {
     const map = new Map<string, number>();
-    for (const task of state.tasks) {
+    for (const task of statsTasks) {
       map.set(task.category, (map.get(task.category) ?? 0) + (task.actualMinutes ?? 0));
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
-  }, [state.tasks]);
+  }, [statsTasks]);
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
@@ -484,12 +507,9 @@ function App() {
 
   const addExam = async () => {
     if (!examDraft.examName.trim()) return;
-    const exam = { ...examDraft, id: editingExamId ?? crypto.randomUUID(), examName: examDraft.examName.trim() };
+    const exam = { ...examDraft, id: editingExamId ?? crypto.randomUUID(), examName: examDraft.examName.trim(), rewardPoints: 0 };
     if (editingExamId) await updateCloudExam(familyCode, exam);
-    else {
-      await addCloudExam(familyCode, exam);
-      if ((exam.rewardPoints ?? 0) !== 0) await addCloudLedger(familyCode, "earn", exam.rewardPoints ?? 0, `成绩积分：${exam.examName}`);
-    }
+    else await addCloudExam(familyCode, exam);
     setExamDraft({ ...examDraft, examName: "" });
     setEditingExamId(null);
     await load();
@@ -507,7 +527,7 @@ function App() {
       totalScore: exam.totalScore,
       averageScore: exam.averageScore ?? 0,
       classRank: exam.classRank ?? 0,
-      rewardPoints: exam.rewardPoints ?? 0,
+      rewardPoints: 0,
       examDate: exam.examDate,
     });
   };
@@ -535,6 +555,37 @@ function App() {
       return;
     }
     await deleteCloudSubject(familyCode, subject.id);
+    await load();
+  };
+
+  const saveBadge = async () => {
+    if (!badgeDraft.name.trim()) return;
+    const badge: Badge = {
+      ...badgeDraft,
+      id: editingBadgeId ?? (badgeDraft.id || crypto.randomUUID()),
+      name: badgeDraft.name.trim(),
+      description: badgeDraft.description.trim(),
+      icon: badgeDraft.icon || "Medal",
+      conditionValue: Math.max(1, Number(badgeDraft.conditionValue) || 1),
+      unlocked: editingBadgeId ? badgeDraft.unlocked : false,
+    };
+    await upsertCloudBadge(familyCode, badge);
+    setBadgeDraft({ id: "", name: "", description: "", icon: "Medal", unlocked: false, conditionType: "completedTasks", conditionValue: 1 });
+    setEditingBadgeId(null);
+    await load();
+  };
+
+  const editBadge = (badge: Badge) => {
+    setEditingBadgeId(badge.id);
+    setBadgeDraft({ ...badge, icon: badge.icon || "Medal" });
+  };
+
+  const removeBadge = async (id: string) => {
+    await deleteCloudBadge(familyCode, id);
+    if (editingBadgeId === id) {
+      setEditingBadgeId(null);
+      setBadgeDraft({ id: "", name: "", description: "", icon: "Medal", unlocked: false, conditionType: "completedTasks", conditionValue: 1 });
+    }
     await load();
   };
 
@@ -595,7 +646,7 @@ function App() {
       badges: state.badges,
       rewards: state.rewards,
       subjects: state.subjects,
-      settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName, parentPassword: state.settings.parentPassword ?? "admin" }] : [],
+      settings: state.settings ? [{ id: state.settings.id, childName: state.settings.childName, parentPassword: state.settings.parentPassword ?? "admin", badgeStartDate: state.settings.badgeStartDate ?? today() }] : [],
       ledger: state.ledger,
       exportedAt: nowIso(),
     };
@@ -1081,7 +1132,6 @@ function App() {
                   <NumberInput className="exam-field-small" value={examDraft.score} onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
                   <NumberInput className="exam-field-small" value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
                   <NumberInput className="exam-field-medium" value={examDraft.classRank} suffix="班级名次" onChange={(value) => setExamDraft({ ...examDraft, classRank: value })} />
-                  <NumberInput className="exam-field-medium" value={examDraft.rewardPoints} suffix="积分" onChange={(value) => setExamDraft({ ...examDraft, rewardPoints: value })} />
                   <input className="input exam-date-input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
                   <button className="primary-button exam-save-button" onClick={addExam}>
                     <Save size={20} /> {editingExamId ? "更新" : "保存"}
@@ -1139,7 +1189,6 @@ function App() {
                       <div className="exam-card-meta">
                         <span>{exam.examDate}</span>
                         {exam.classRank ? <span>班级第 {exam.classRank} 名</span> : null}
-                        {exam.rewardPoints ? <span>积分 +{exam.rewardPoints}</span> : null}
                       </div>
                       <div className="flex gap-2">
                         <button className="icon-button" onClick={() => editExam(exam)} aria-label="修改成绩">
@@ -1159,31 +1208,53 @@ function App() {
           {activeTab === "stats" && (
             <div className="space-y-5">
               <Header title="学习统计" subtitle="用图表看见时间、完成率和科目分布。" />
+              <Panel title="统计范围">
+                <div className="stats-controls">
+                  <input className="input" type="date" value={statsDate} onChange={(event) => setStatsDate(event.target.value)} />
+                  <div className="segmented-control">
+                    {[
+                      ["day", "当天"],
+                      ["week", "本周"],
+                      ["month", "本月"],
+                    ].map(([value, label]) => (
+                      <button className={statsRange === value ? "primary-button" : "secondary-button"} key={value} onClick={() => setStatsRange(value as typeof statsRange)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-4">
+                  <Metric title="计划用时" value={`${statsSummary.planned}`} suffix="分钟" tone="blue" />
+                  <Metric title="实际用时" value={`${statsSummary.minutes}`} suffix="分钟" tone="green" />
+                  <Metric title="完成任务" value={`${statsSummary.completed}`} suffix={`/ ${statsSummary.total} 个`} tone="yellow" />
+                  <Metric title="完成率" value={`${statsSummary.total ? Math.round((statsSummary.completed / statsSummary.total) * 100) : 0}`} suffix="%" tone="purple" />
+                </div>
+              </Panel>
               <div className="grid gap-5 xl:grid-cols-2">
-                <Panel title="计划用时 / 实际用时">
+                <Panel title="每日计划用时 / 实际用时">
                   <ChartBox>
                     <ResponsiveContainer>
-                      <BarChart data={subjectTimeStats} layout="vertical">
+                      <BarChart data={dailyTimeStats}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis type="number" />
-                        <YAxis dataKey="subject" type="category" width={56} />
+                        <XAxis dataKey="day" />
+                        <YAxis />
                         <Tooltip />
                         <Legend />
-                        <Bar dataKey="planned" fill="#60a5fa" name="计划用时" radius={[0, 10, 10, 0]} />
-                        <Bar dataKey="minutes" fill="#f59e0b" name="实际用时" radius={[0, 10, 10, 0]} />
+                        <Bar dataKey="planned" fill="#60a5fa" name="计划用时" radius={[10, 10, 0, 0]} />
+                        <Bar dataKey="minutes" fill="#f59e0b" name="实际用时" radius={[10, 10, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </ChartBox>
                 </Panel>
-                <Panel title="每日学习时间">
+                <Panel title="每日完成任务">
                   <ChartBox>
                     <ResponsiveContainer>
-                      <BarChart data={dailyStats}>
+                      <BarChart data={dailyTimeStats}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" />
+                        <XAxis dataKey="day" />
                         <YAxis />
                         <Tooltip />
-                        <Bar dataKey="minutes" fill="#14b8a6" radius={[10, 10, 0, 0]} />
+                        <Bar dataKey="completed" fill="#14b8a6" name="已完成" radius={[10, 10, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </ChartBox>
@@ -1210,15 +1281,62 @@ function App() {
           {activeTab === "badges" && (
             <div className="space-y-5">
               <Header title="勋章墙" subtitle="每个好习惯，都值得被看见。" />
+              {userRole === "parent" && (
+                <Panel title={editingBadgeId ? "修改勋章规则" : "添加勋章规则"}>
+                  <div className="badge-form">
+                    <input className="input" placeholder="勋章名称" value={badgeDraft.name} onChange={(event) => setBadgeDraft({ ...badgeDraft, name: event.target.value })} />
+                    <select className="input" value={badgeDraft.conditionType} onChange={(event) => setBadgeDraft({ ...badgeDraft, conditionType: event.target.value })}>
+                      {badgeConditionOptions.map((item) => (
+                        <option key={item.value} value={item.value}>{item.label}</option>
+                      ))}
+                    </select>
+                    <NumberInput value={badgeDraft.conditionValue} suffix="目标" onChange={(value) => setBadgeDraft({ ...badgeDraft, conditionValue: value })} />
+                    <button className="primary-button" onClick={saveBadge}>
+                      <Save size={20} /> {editingBadgeId ? "更新" : "添加"}
+                    </button>
+                  </div>
+                  <textarea
+                    className="input mt-3 min-h-24 w-full py-3"
+                    placeholder="勋章说明，例如：连续一周认真完成学习计划"
+                    value={badgeDraft.description}
+                    onChange={(event) => setBadgeDraft({ ...badgeDraft, description: event.target.value })}
+                  />
+                  <div className="icon-picker">
+                    {badgeIconOptions.map((item) => {
+                      const Icon = item.icon;
+                      const selected = (badgeDraft.icon ?? "Medal") === item.name;
+                      return (
+                        <button className={selected ? "icon-choice icon-choice-active" : "icon-choice"} key={item.name} onClick={() => setBadgeDraft({ ...badgeDraft, icon: item.name })} title={item.label}>
+                          <Icon size={20} />
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Panel>
+              )}
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {state.badges.map((badge) => (
-                  <article className={`badge-card ${badge.unlocked ? "badge-unlocked" : ""}`} key={badge.id}>
-                    <Medal size={34} />
-                    <h3>{badge.name}</h3>
-                    <p>{badge.description}</p>
-                    <span>{badge.unlocked ? "已解锁" : `目标：${badge.conditionValue}`}</span>
-                  </article>
-                ))}
+                {state.badges.map((badge) => {
+                  const BadgeIcon = getBadgeIcon(badge.icon);
+                  return (
+                    <article className={`badge-card ${badge.unlocked ? "badge-unlocked" : ""}`} key={badge.id}>
+                      <BadgeIcon size={34} />
+                      <h3>{badge.name}</h3>
+                      <p>{badge.description}</p>
+                      <span>{badge.unlocked ? "已解锁" : `${getBadgeConditionLabel(badge.conditionType)}：${badge.conditionValue}`}</span>
+                      {userRole === "parent" && (
+                        <div className="mt-3 flex gap-2">
+                          <button className="secondary-button flex-1" onClick={() => editBadge(badge)}>
+                            <Pencil size={18} /> 修改
+                          </button>
+                          <button className="icon-button" onClick={() => removeBadge(badge.id)} aria-label="删除勋章">
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1379,6 +1497,15 @@ function App() {
                       保存密码
                     </button>
                   </div>
+                  <div className="grid gap-3 lg:grid-cols-[1fr_140px]">
+                    <label className="input flex items-center gap-3">
+                      <span className="shrink-0 text-sm text-slate-500">成就统计从</span>
+                      <input className="w-full bg-transparent outline-none" type="date" value={settingsDraft.badgeStartDate ?? today()} onChange={(event) => setSettingsDraft({ ...settingsDraft, badgeStartDate: event.target.value })} />
+                    </label>
+                    <button className="secondary-button" onClick={saveSettings}>
+                      保存日期
+                    </button>
+                  </div>
                   <p className="rounded-2xl bg-slate-50 p-4 font-bold text-slate-700">
                     {isCloudBusy && <Loader2 className="mr-2 inline animate-spin" size={18} />}
                     {cloudStatus}
@@ -1530,6 +1657,14 @@ function getRewardIcon(iconName?: string) {
   return rewardIconOptions.find((item) => item.name === iconName)?.icon ?? Gift;
 }
 
+function getBadgeIcon(iconName?: string) {
+  return badgeIconOptions.find((item) => item.name === iconName)?.icon ?? Medal;
+}
+
+function getBadgeConditionLabel(conditionType: string) {
+  return badgeConditionOptions.find((item) => item.value === conditionType)?.label ?? "目标";
+}
+
 function getTaskElapsedMinutes(task: Task) {
   if (task.status === "running" && task.startTime) {
     return (task.actualMinutes ?? 0) + Math.max(1, Math.round((Date.now() - new Date(task.startTime).getTime()) / 60000));
@@ -1556,6 +1691,36 @@ function toLocalDateInputValue(date: Date) {
 function parseLocalDate(dateText: string) {
   const [year, month, day] = dateText.split("-").map(Number);
   return new Date(year, (month ?? 1) - 1, day ?? 1);
+}
+
+function addLocalDays(dateText: string, days: number) {
+  const date = parseLocalDate(dateText);
+  date.setDate(date.getDate() + days);
+  return toLocalDateInputValue(date);
+}
+
+function getStatsWindow(dateText: string, range: "day" | "week" | "month") {
+  const date = parseLocalDate(dateText);
+  if (range === "day") return { start: toLocalDateInputValue(date), end: toLocalDateInputValue(date) };
+  if (range === "week") {
+    const day = date.getDay();
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - ((day + 6) % 7));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return { start: toLocalDateInputValue(monday), end: toLocalDateInputValue(sunday) };
+  }
+  const start = new Date(date.getFullYear(), date.getMonth(), 1);
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  return { start: toLocalDateInputValue(start), end: toLocalDateInputValue(end) };
+}
+
+function getDateRange(start: string, end: string) {
+  const days: string[] = [];
+  for (let day = start; day <= end; day = addLocalDays(day, 1)) {
+    days.push(day);
+  }
+  return days;
 }
 
 function formatDateTime(value: string) {

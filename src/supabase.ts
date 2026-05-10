@@ -58,7 +58,7 @@ type LedgerRow = {
   reason: string;
   created_at: string;
 };
-type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null };
+type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null; badge_start_date?: string | null };
 type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
 
 const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
@@ -148,7 +148,7 @@ export async function ensureCloudSeedData(familyCode: string) {
   }
 
   if (!settingsCount) {
-    await upsertRows("family_settings", [{ id: "default", family_code: familyCode, child_name: "小朋友", parent_password: "admin" }]);
+    await upsertRows("family_settings", [{ id: "default", family_code: familyCode, child_name: "小朋友", parent_password: "admin", badge_start_date: new Date().toISOString().slice(0, 10) }]);
   }
 
   if (!subjectCount) {
@@ -219,8 +219,17 @@ export async function deleteCloudReward(familyCode: string, id: string) {
   if (error) throw error;
 }
 
+export async function upsertCloudBadge(familyCode: string, badge: Badge) {
+  await upsertRows("family_badges", [toBadgeRow(familyCode, badge)]);
+}
+
+export async function deleteCloudBadge(familyCode: string, id: string) {
+  const { error } = await supabase.from("family_badges").delete().eq("family_code", familyCode).eq("id", id);
+  if (error) throw error;
+}
+
 export async function updateCloudSettings(familyCode: string, settings: AppSettings) {
-  await upsertRows("family_settings", [{ id: settings.id, family_code: familyCode, child_name: settings.childName, parent_password: settings.parentPassword ?? "admin" }]);
+  await upsertRows("family_settings", [{ id: settings.id, family_code: familyCode, child_name: settings.childName, parent_password: settings.parentPassword ?? "admin", badge_start_date: settings.badgeStartDate }]);
 }
 
 export async function restoreCloudBackup(familyCode: string, backup: BackupData, mode: "overwrite" | "merge") {
@@ -243,7 +252,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
     upsertRows("family_rewards", backup.rewards.map((reward) => toRewardRow(familyCode, reward))),
     upsertRows("family_subjects", (backup.subjects ?? []).map((subject) => toSubjectRow(familyCode, subject))),
     upsertRows("family_ledger", (backup.ledger ?? []).map((row) => toLedgerRow(familyCode, row))),
-    upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName, parent_password: setting.parentPassword ?? "admin" }))),
+    upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName, parent_password: setting.parentPassword ?? "admin", badge_start_date: setting.badgeStartDate }))),
   ]);
 }
 
@@ -251,10 +260,22 @@ export function getPointBalance(ledger: PointLedger[]) {
   return ledger.reduce((sum, row) => sum + row.points, 0);
 }
 
-export async function refreshCloudBadges(familyCode: string, tasks: Task[], badges: Badge[]) {
-  const completedTasks = tasks.filter((task) => task.status === "completed").length;
-  const studyMinutes = tasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
-  const stats: Record<string, number> = { completedTasks, studyMinutes };
+export async function refreshCloudBadges(familyCode: string, tasks: Task[], badges: Badge[], exams: ExamRecord[] = [], startDate?: string) {
+  const scopedTasks = startDate ? tasks.filter((task) => task.startDate >= startDate) : tasks;
+  const scopedExams = startDate ? exams.filter((exam) => exam.examDate >= startDate) : exams;
+  const completedTasks = scopedTasks.filter((task) => task.status === "completed").length;
+  const studyMinutes = scopedTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
+  const completedDates = new Set(scopedTasks.filter((task) => task.status === "completed").map((task) => (task.endTime ? task.endTime.slice(0, 10) : task.startDate)));
+  const tasksByDate = new Map<string, Task[]>();
+  for (const task of scopedTasks) {
+    const list = tasksByDate.get(task.startDate) ?? [];
+    list.push(task);
+    tasksByDate.set(task.startDate, list);
+  }
+  const perfectDays = [...tasksByDate.values()].filter((items) => items.length > 0 && items.every((task) => task.status === "completed")).length;
+  const examsAbove90 = scopedExams.filter((exam) => formatExamPercent(exam) >= 90).length;
+  const examsAbove95 = scopedExams.filter((exam) => formatExamPercent(exam) >= 95).length;
+  const stats: Record<string, number> = { completedTasks, studyMinutes, completedDays: completedDates.size, perfectDays, examsAbove90, examsAbove95 };
   const unlockedAt = new Date().toISOString();
   const toUnlock = badges.filter((badge) => !badge.unlocked && (stats[badge.conditionType] ?? 0) >= badge.conditionValue);
 
@@ -264,7 +285,6 @@ export async function refreshCloudBadges(familyCode: string, tasks: Task[], badg
     ...toUnlock.map((badge) =>
       supabase.from("family_badges").update({ unlocked: true, unlocked_at: unlockedAt }).eq("family_code", familyCode).eq("id", badge.id),
     ),
-    ...toUnlock.map((badge) => addCloudLedger(familyCode, "earn", 5, `解锁勋章：${badge.name}`)),
   ]);
 }
 
@@ -461,6 +481,11 @@ function toLedgerRow(familyCode: string, row: PointLedger): LedgerRow {
   };
 }
 
+function formatExamPercent(exam: ExamRecord) {
+  if (!exam.totalScore) return 0;
+  return Math.round((exam.score / exam.totalScore) * 100);
+}
+
 function toRewardRow(familyCode: string, reward: Reward) {
   return {
     id: reward.id,
@@ -478,6 +503,7 @@ function fromSettingsRow(row: SettingsRow): AppSettings {
     id: row.id,
     childName: row.child_name,
     parentPassword: row.parent_password ?? "admin",
+    badgeStartDate: row.badge_start_date ?? undefined,
   };
 }
 

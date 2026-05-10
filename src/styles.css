@@ -107,6 +107,14 @@ button:disabled {
     }
   }
 
+  .stats-controls {
+    @apply grid gap-3 lg:grid-cols-[220px_1fr];
+  }
+
+  .segmented-control {
+    @apply grid gap-2 sm:grid-cols-3;
+  }
+
   .reward-toggle {
     @apply inline-flex min-h-11 items-center gap-2 rounded-lg border-2 border-slate-100 bg-white px-3 font-black text-slate-700 shadow-sm transition;
   }
@@ -241,9 +249,14 @@ button:disabled {
   }
 
   .reward-form,
+  .badge-form,
   .ledger-form {
     @apply grid gap-3;
     grid-template-columns: minmax(0, 1fr) minmax(120px, 160px) minmax(120px, 140px) minmax(120px, 140px);
+  }
+
+  .badge-form {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 1.1fr) minmax(120px, 150px) minmax(120px, 140px);
   }
 
   .ledger-form {
@@ -308,6 +321,7 @@ button:disabled {
 
   @media (max-width: 920px) {
     .reward-form,
+    .badge-form,
     .ledger-form {
       grid-template-columns: 1fr;
     }
