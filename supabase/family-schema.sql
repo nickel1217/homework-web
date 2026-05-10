@@ -105,6 +105,25 @@ create index if not exists family_exams_family_code_idx on public.family_exams (
 create index if not exists family_ledger_family_code_idx on public.family_ledger (family_code);
 create index if not exists family_subjects_family_code_idx on public.family_subjects (family_code);
 
+create or replace function public.skip_future_repeat_task_instances()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.id like 'repeat:%'
+     and new.repeat_type = 'none'
+     and new.start_date > to_char((now() at time zone 'Asia/Shanghai')::date, 'YYYY-MM-DD') then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists skip_future_repeat_task_instances on public.family_tasks;
+create trigger skip_future_repeat_task_instances
+before insert on public.family_tasks
+for each row execute function public.skip_future_repeat_task_instances();
+
 alter table public.family_tasks enable row level security;
 alter table public.family_exams enable row level security;
 alter table public.family_badges enable row level security;
