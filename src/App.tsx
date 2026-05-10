@@ -357,9 +357,9 @@ function App() {
   const statsWindow = useMemo(() => getStatsWindow(statsDate, statsRange), [statsDate, statsRange]);
   const statsTasks = useMemo(() => state.tasks.filter((task) => task.startDate >= statsWindow.start && task.startDate <= statsWindow.end), [state.tasks, statsWindow]);
   const dailyTimeStats = useMemo(() => {
-    const map = new Map<string, { day: string; date: string; minutes: number; planned: number; completed: number; total: number }>();
+    const map = new Map<string, { label: string; date: string; minutes: number; planned: number; completed: number; total: number }>();
     for (const day of getDateRange(statsWindow.start, statsWindow.end)) {
-      map.set(day, { day: day.slice(5), date: day, minutes: 0, planned: 0, completed: 0, total: 0 });
+      map.set(day, { label: day.slice(5), date: day, minutes: 0, planned: 0, completed: 0, total: 0 });
     }
     for (const task of statsTasks) {
       const item = map.get(task.startDate);
@@ -371,6 +371,21 @@ function App() {
     }
     return [...map.values()];
   }, [statsTasks, statsWindow]);
+  const subjectTimeStats = useMemo(() => {
+    const map = new Map<string, { label: string; date: string; subject: string; minutes: number; planned: number; completed: number; total: number }>();
+    for (const task of statsTasks) {
+      const item = map.get(task.category) ?? { label: task.category, date: statsDate, subject: task.category, minutes: 0, planned: 0, completed: 0, total: 0 };
+      item.minutes += task.actualMinutes ?? 0;
+      item.planned += task.plannedMinutes ?? 0;
+      item.total += 1;
+      if (task.status === "completed") item.completed += 1;
+      map.set(task.category, item);
+    }
+    return [...map.values()];
+  }, [statsTasks]);
+  const timeComparisonStats = statsRange === "day" ? subjectTimeStats : dailyTimeStats;
+  const timeComparisonTitle = statsRange === "day" ? "各学科计划用时 / 实际用时" : "每日计划用时 / 实际用时";
+  const completionTitle = statsRange === "day" ? "各学科完成任务" : "每日完成任务";
   const statsSummary = useMemo(
     () => dailyTimeStats.reduce((sum, item) => ({ planned: sum.planned + item.planned, minutes: sum.minutes + item.minutes, completed: sum.completed + item.completed, total: sum.total + item.total }), { planned: 0, minutes: 0, completed: 0, total: 0 }),
     [dailyTimeStats],
@@ -1231,12 +1246,12 @@ function App() {
                 </div>
               </Panel>
               <div className="grid gap-5 xl:grid-cols-2">
-                <Panel title="每日计划用时 / 实际用时">
+                <Panel title={timeComparisonTitle}>
                   <ChartBox>
                     <ResponsiveContainer>
-                      <BarChart data={dailyTimeStats}>
+                      <BarChart data={timeComparisonStats}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="day" />
+                        <XAxis dataKey="label" />
                         <YAxis />
                         <Tooltip />
                         <Legend />
@@ -1246,12 +1261,12 @@ function App() {
                     </ResponsiveContainer>
                   </ChartBox>
                 </Panel>
-                <Panel title="每日完成任务">
+                <Panel title={completionTitle}>
                   <ChartBox>
                     <ResponsiveContainer>
-                      <BarChart data={dailyTimeStats}>
+                      <BarChart data={timeComparisonStats}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="day" />
+                        <XAxis dataKey="label" />
                         <YAxis />
                         <Tooltip />
                         <Bar dataKey="completed" fill="#14b8a6" name="已完成" radius={[10, 10, 0, 0]} />
