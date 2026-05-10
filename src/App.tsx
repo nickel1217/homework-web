@@ -1717,7 +1717,7 @@ function getTaskDueDate(task: Task) {
 
 function getRepeatOccurrenceDates(task: Task, todayDate: string) {
   if (task.repeatType === "none") return [];
-  const endDate = task.endDate || todayDate;
+  const endDate = task.endDate && task.endDate < todayDate ? task.endDate : todayDate;
   if (endDate <= task.startDate) return [];
   const dates: string[] = [];
   for (let date = addLocalDays(task.startDate, 1); date <= endDate; date = addLocalDays(date, 1)) {
