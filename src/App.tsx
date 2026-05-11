@@ -75,6 +75,7 @@ import {
 import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Subject, Task } from "./types";
 
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "subjects" | "settings";
+type TaskSort = "default" | "time" | "subject" | "type" | "status";
 
 type AppState = {
   tasks: Task[];
@@ -187,6 +188,7 @@ function App() {
   const [taskSubjectFilter, setTaskSubjectFilter] = useState("全部学科");
   const [taskTypeFilter, setTaskTypeFilter] = useState("全部类别");
   const [taskStatusFilter, setTaskStatusFilter] = useState("全部状态");
+  const [taskSort, setTaskSort] = useState<TaskSort>("default");
   const [examDraft, setExamDraft] = useState({
     subject: "数学",
     examType: "单元测试",
@@ -331,13 +333,17 @@ function App() {
   const completedToday = todayTasks.filter((task) => isTaskCompletedOnDate(task, today()));
   const studyMinutesToday = todayTasks.reduce((sum, task) => sum + getTaskMinutesForDate(task, today()), 0);
   const completionRate = todayTasks.length === 0 ? 0 : Math.round((completedToday.length / todayTasks.length) * 100);
-  const filteredTasks = state.tasks.filter(
-    (task) =>
-      taskOverlapsDate(task, selectedTaskDate) &&
-      (!hideCompletedTasks || task.status !== "completed") &&
-      (taskSubjectFilter === "全部学科" || task.category === taskSubjectFilter) &&
-      (taskTypeFilter === "全部类别" || task.assignmentType === taskTypeFilter) &&
-      (taskStatusFilter === "全部状态" || task.status === taskStatusFilter),
+  const filteredTasks = sortTasks(
+    state.tasks.filter(
+      (task) =>
+        taskOverlapsDate(task, selectedTaskDate) &&
+        (!hideCompletedTasks || task.status !== "completed") &&
+        (taskSubjectFilter === "全部学科" || task.category === taskSubjectFilter) &&
+        (taskTypeFilter === "全部类别" || task.assignmentType === taskTypeFilter) &&
+        (taskStatusFilter === "全部状态" || task.status === taskStatusFilter),
+    ),
+    taskSort,
+    subjects,
   );
   const selectedDateCompleted = filteredTasks.filter((task) => isTaskCompletedOnDate(task, selectedTaskDate)).length;
   const filteredExams = state.exams.filter(
@@ -1042,7 +1048,7 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <div className="mt-3 grid gap-3 md:grid-cols-4">
                   <select className="input" value={taskSubjectFilter} onChange={(event) => setTaskSubjectFilter(event.target.value)}>
                     <option>全部学科</option>
                     {subjects.map((subject) => (
@@ -1062,6 +1068,13 @@ function App() {
                     <option value="paused">已暂停</option>
                     <option value="completed">已完成</option>
                     <option value="expired">已过期</option>
+                  </select>
+                  <select className="input" value={taskSort} onChange={(event) => setTaskSort(event.target.value as TaskSort)}>
+                    <option value="default">默认：未完成优先</option>
+                    <option value="time">按开始时间</option>
+                    <option value="subject">按学科</option>
+                    <option value="type">按作业类别</option>
+                    <option value="status">按完成状态</option>
                   </select>
                 </div>
                 <p className="mt-3 rounded-2xl bg-slate-50 p-4 font-bold text-slate-600">
@@ -1688,6 +1701,67 @@ function getBadgeIcon(iconName?: string) {
 
 function getBadgeConditionLabel(conditionType: string) {
   return badgeConditionOptions.find((item) => item.value === conditionType)?.label ?? "目标";
+}
+
+function sortTasks(tasks: Task[], sort: TaskSort, subjects: Subject[]) {
+  return [...tasks].sort((left, right) => compareTasks(left, right, sort, subjects));
+}
+
+function compareTasks(left: Task, right: Task, sort: TaskSort, subjects: Subject[]) {
+  const fallback = () => compareTaskStart(left, right) || left.title.localeCompare(right.title, "zh-Hans-CN") || left.id.localeCompare(right.id);
+  if (sort === "time") return compareTaskStart(left, right) || compareTaskStatus(left, right) || fallback();
+  if (sort === "subject") return compareTaskSubject(left, right, subjects) || compareTaskDefault(left, right) || fallback();
+  if (sort === "type") return compareTaskType(left, right) || compareTaskDefault(left, right) || fallback();
+  if (sort === "status") return compareTaskStatus(left, right) || fallback();
+  return compareTaskDefault(left, right) || fallback();
+}
+
+function compareTaskDefault(left: Task, right: Task) {
+  return compareTaskCompletion(left, right) || compareTaskStart(left, right);
+}
+
+function compareTaskCompletion(left: Task, right: Task) {
+  return getTaskCompletionRank(left) - getTaskCompletionRank(right);
+}
+
+function compareTaskStatus(left: Task, right: Task) {
+  return getTaskStatusRank(left) - getTaskStatusRank(right);
+}
+
+function compareTaskStart(left: Task, right: Task) {
+  return getTaskStartSortValue(left).localeCompare(getTaskStartSortValue(right));
+}
+
+function compareTaskSubject(left: Task, right: Task, subjects: Subject[]) {
+  return getSubjectSortRank(subjects, left.category) - getSubjectSortRank(subjects, right.category) || left.category.localeCompare(right.category, "zh-Hans-CN");
+}
+
+function compareTaskType(left: Task, right: Task) {
+  return (left.assignmentType ?? "").localeCompare(right.assignmentType ?? "", "zh-Hans-CN");
+}
+
+function getTaskCompletionRank(task: Task) {
+  return task.status === "completed" ? 1 : 0;
+}
+
+function getTaskStatusRank(task: Task) {
+  const ranks: Record<Task["status"], number> = { running: 0, paused: 1, pending: 2, expired: 3, completed: 4 };
+  return ranks[task.status] ?? 99;
+}
+
+function getTaskStartSortValue(task: Task) {
+  return `${task.startDate}T${getTaskLocalTimePart(task.startTime) ?? "00:00:00"}`;
+}
+
+function getTaskLocalTimePart(value?: string) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.includes("T") ? value.split("T")[1]?.slice(0, 8) : value.slice(0, 8);
+  return date.toTimeString().slice(0, 8);
+}
+
+function getSubjectSortRank(subjects: Subject[], name: string) {
+  return subjects.find((subject) => subject.name === name)?.sortOrder ?? 999;
 }
 
 function getTaskElapsedMinutes(task: Task) {
