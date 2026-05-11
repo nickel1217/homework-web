@@ -328,8 +328,8 @@ function App() {
   const subjects = state.subjects.length > 0 ? state.subjects : fallbackSubjects;
   const visibleSubjects = subjects.filter((subject) => subject.showOnHome);
   const visibleTabs = tabs.filter((tab) => userRole === "parent" || !["subjects", "settings"].includes(tab.id));
-  const completedToday = todayTasks.filter((task) => task.status === "completed");
-  const studyMinutesToday = todayTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
+  const completedToday = todayTasks.filter((task) => isTaskCompletedOnDate(task, today()));
+  const studyMinutesToday = todayTasks.reduce((sum, task) => sum + getTaskMinutesForDate(task, today()), 0);
   const completionRate = todayTasks.length === 0 ? 0 : Math.round((completedToday.length / todayTasks.length) * 100);
   const filteredTasks = state.tasks.filter(
     (task) =>
@@ -339,7 +339,7 @@ function App() {
       (taskTypeFilter === "全部类别" || task.assignmentType === taskTypeFilter) &&
       (taskStatusFilter === "全部状态" || task.status === taskStatusFilter),
   );
-  const selectedDateCompleted = filteredTasks.filter((task) => task.status === "completed").length;
+  const selectedDateCompleted = filteredTasks.filter((task) => isTaskCompletedOnDate(task, selectedTaskDate)).length;
   const filteredExams = state.exams.filter(
     (exam) =>
       (examSubjectFilter === "全部学科" || exam.subject === examSubjectFilter) &&
@@ -352,34 +352,38 @@ function App() {
   const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
 
   const statsWindow = useMemo(() => getStatsWindow(statsDate, statsRange), [statsDate, statsRange]);
-  const statsTasks = useMemo(() => state.tasks.filter((task) => task.startDate >= statsWindow.start && task.startDate <= statsWindow.end), [state.tasks, statsWindow]);
+  const statsDates = useMemo(() => getDateRange(statsWindow.start, statsWindow.end), [statsWindow]);
   const dailyTimeStats = useMemo(() => {
     const map = new Map<string, { label: string; date: string; minutes: number; planned: number; completed: number; total: number }>();
-    for (const day of getDateRange(statsWindow.start, statsWindow.end)) {
+    for (const day of statsDates) {
       map.set(day, { label: day.slice(5), date: day, minutes: 0, planned: 0, completed: 0, total: 0 });
     }
-    for (const task of statsTasks) {
-      const item = map.get(task.startDate);
-      if (!item) continue;
-      item.minutes += task.actualMinutes ?? 0;
-      item.planned += task.plannedMinutes ?? 0;
-      item.total += 1;
-      if (task.status === "completed") item.completed += 1;
+    for (const task of state.tasks) {
+      for (const date of statsDates) {
+        if (!taskOverlapsDate(task, date)) continue;
+        const item = map.get(date);
+        if (!item) continue;
+        item.minutes += getTaskMinutesForDate(task, date);
+        item.planned += task.plannedMinutes ?? 0;
+        item.total += 1;
+        if (isTaskCompletedOnDate(task, date)) item.completed += 1;
+      }
     }
     return [...map.values()];
-  }, [statsTasks, statsWindow]);
+  }, [state.tasks, statsDates]);
   const subjectTimeStats = useMemo(() => {
     const map = new Map<string, { label: string; date: string; subject: string; minutes: number; planned: number; completed: number; total: number }>();
-    for (const task of statsTasks) {
+    for (const task of state.tasks) {
+      if (!taskOverlapsDate(task, statsDate)) continue;
       const item = map.get(task.category) ?? { label: task.category, date: statsDate, subject: task.category, minutes: 0, planned: 0, completed: 0, total: 0 };
-      item.minutes += task.actualMinutes ?? 0;
+      item.minutes += getTaskMinutesForDate(task, statsDate);
       item.planned += task.plannedMinutes ?? 0;
       item.total += 1;
-      if (task.status === "completed") item.completed += 1;
+      if (isTaskCompletedOnDate(task, statsDate)) item.completed += 1;
       map.set(task.category, item);
     }
     return [...map.values()];
-  }, [statsTasks]);
+  }, [state.tasks, statsDate]);
   const timeComparisonStats = statsRange === "day" ? subjectTimeStats : dailyTimeStats;
   const timeComparisonTitle = statsRange === "day" ? "各学科计划用时 / 实际用时" : "每日计划用时 / 实际用时";
   const completionTitle = statsRange === "day" ? "各学科完成任务" : "每日完成任务";
@@ -390,11 +394,14 @@ function App() {
 
   const categoryStats = useMemo(() => {
     const map = new Map<string, number>();
-    for (const task of statsTasks) {
-      map.set(task.category, (map.get(task.category) ?? 0) + (task.actualMinutes ?? 0));
+    for (const task of state.tasks) {
+      for (const date of statsDates) {
+        if (!taskOverlapsDate(task, date)) continue;
+        map.set(task.category, (map.get(task.category) ?? 0) + getTaskMinutesForDate(task, date));
+      }
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
-  }, [statsTasks]);
+  }, [state.tasks, statsDates]);
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
@@ -1690,6 +1697,16 @@ function getTaskElapsedMinutes(task: Task) {
   return task.actualMinutes ?? 0;
 }
 
+function getTaskMinutesForDate(task: Task, date: string) {
+  if (task.status === "completed") {
+    return isTaskCompletedOnDate(task, date) ? task.actualMinutes ?? 0 : 0;
+  }
+  if (task.status === "running" && task.startTime) {
+    return getLocalDateFromIso(task.startTime) === date ? getTaskElapsedMinutes(task) : 0;
+  }
+  return task.startDate === date ? task.actualMinutes ?? 0 : 0;
+}
+
 function getTaskRunMinutes(task: Task) {
   if (task.status !== "running" || !task.startTime) return 0;
   const startedAt = new Date(task.startTime).getTime();
@@ -1703,8 +1720,30 @@ function getElapsedWholeMinutes(startedAt: number) {
 
 function taskOverlapsDate(task: Task, date: string) {
   if (task.repeatType !== "none") return task.startDate === date;
-  const endDate = task.endDate || task.startDate;
+  const endDate = getTaskVisibleEndDate(task);
   return task.startDate <= date && date <= endDate;
+}
+
+function isTaskCompletedOnDate(task: Task, date: string) {
+  return task.status === "completed" && getTaskCompletedDate(task) === date;
+}
+
+function getTaskCompletedDate(task: Task) {
+  if (task.status !== "completed") return undefined;
+  return task.endTime ? getLocalDateFromIso(task.endTime) : task.startDate;
+}
+
+function getTaskVisibleEndDate(task: Task) {
+  const scheduledEndDate = task.endDate || task.startDate;
+  const completedDate = getTaskCompletedDate(task);
+  if (completedDate && completedDate < scheduledEndDate) return completedDate;
+  return scheduledEndDate;
+}
+
+function getLocalDateFromIso(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return toLocalDateInputValue(date);
 }
 
 function isTaskOverdue(task: Task) {
