@@ -76,6 +76,7 @@ import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, S
 
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "subjects" | "settings";
 type TaskSort = "default" | "time" | "subject" | "type" | "status";
+type LedgerRange = "7d" | "30d" | "all" | "custom";
 
 type AppState = {
   tasks: Task[];
@@ -211,6 +212,9 @@ function App() {
   const [badgeDraft, setBadgeDraft] = useState<Badge>({ id: "", name: "", description: "", icon: "Medal", unlocked: false, conditionType: "completedTasks", conditionValue: 1 });
   const [editingBadgeId, setEditingBadgeId] = useState<string | null>(null);
   const [ledgerDraft, setLedgerDraft] = useState({ reason: "", points: 0 });
+  const [ledgerRange, setLedgerRange] = useState<LedgerRange>("7d");
+  const [ledgerDateFrom, setLedgerDateFrom] = useState(() => addLocalDays(today(), -6));
+  const [ledgerDateTo, setLedgerDateTo] = useState(today());
   const [rewardDraft, setRewardDraft] = useState<Reward>({ id: "", title: "", description: "", pointsCost: 20, icon: "Gift", enabled: true });
   const [editingRewardId, setEditingRewardId] = useState<string | null>(null);
   const [statsDate, setStatsDate] = useState(today());
@@ -408,6 +412,7 @@ function App() {
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
   }, [state.tasks, statsDates]);
+  const filteredLedger = useMemo(() => filterLedger(state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo), [state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo]);
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
@@ -1440,6 +1445,26 @@ function App() {
                 })}
               </div>
               <Panel title="积分流水">
+                <div className="ledger-filter">
+                  <select className="input" value={ledgerRange} onChange={(event) => setLedgerRange(event.target.value as LedgerRange)}>
+                    <option value="7d">最近 7 天</option>
+                    <option value="30d">最近 30 天</option>
+                    <option value="all">全部流水</option>
+                    <option value="custom">自定义日期</option>
+                  </select>
+                  {ledgerRange === "custom" && (
+                    <>
+                      <label className="input flex items-center gap-3">
+                        <span className="shrink-0 text-sm text-slate-500">从</span>
+                        <input className="w-full bg-transparent outline-none" type="date" value={ledgerDateFrom} onChange={(event) => setLedgerDateFrom(event.target.value)} />
+                      </label>
+                      <label className="input flex items-center gap-3">
+                        <span className="shrink-0 text-sm text-slate-500">到</span>
+                        <input className="w-full bg-transparent outline-none" type="date" value={ledgerDateTo} onChange={(event) => setLedgerDateTo(event.target.value)} />
+                      </label>
+                    </>
+                  )}
+                </div>
                 {userRole === "parent" && (
                   <div className="ledger-form">
                     <input className="input" placeholder="积分条目内容" value={ledgerDraft.reason} onChange={(event) => setLedgerDraft({ ...ledgerDraft, reason: event.target.value })} />
@@ -1450,9 +1475,12 @@ function App() {
                   </div>
                 )}
                 <div className="grid gap-2">
-                  {state.ledger.slice(0, userRole === "parent" ? 20 : 8).map((row) => (
+                  {filteredLedger.map((row) => (
                     <div className="ledger-row" key={row.id}>
-                      <span>{row.reason}</span>
+                      <div className="ledger-row-content">
+                        <time>{formatDateTime(row.createdAt)}</time>
+                        <span>{row.reason}</span>
+                      </div>
                       <div className="flex items-center gap-2">
                         <strong className={row.points >= 0 ? "text-green-600" : "text-red-500"}>{row.points > 0 ? `+${row.points}` : row.points}</strong>
                         {userRole === "parent" && (
@@ -1463,6 +1491,7 @@ function App() {
                       </div>
                     </div>
                   ))}
+                  {filteredLedger.length === 0 && <EmptyText text="这个时间范围内还没有积分流水。" />}
                 </div>
               </Panel>
             </div>
@@ -1762,6 +1791,20 @@ function getTaskLocalTimePart(value?: string) {
 
 function getSubjectSortRank(subjects: Subject[], name: string) {
   return subjects.find((subject) => subject.name === name)?.sortOrder ?? 999;
+}
+
+function filterLedger(ledger: PointLedger[], range: LedgerRange, customFrom: string, customTo: string) {
+  const sorted = [...ledger].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  if (range === "all") return sorted;
+  const todayDate = today();
+  const from = range === "custom" ? customFrom : addLocalDays(todayDate, range === "30d" ? -29 : -6);
+  const to = range === "custom" ? customTo : todayDate;
+  const start = from <= to ? from : to;
+  const end = from <= to ? to : from;
+  return sorted.filter((row) => {
+    const date = getLocalDateFromIso(row.createdAt);
+    return start <= date && date <= end;
+  });
 }
 
 function getTaskElapsedMinutes(task: Task) {
