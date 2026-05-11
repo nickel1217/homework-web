@@ -264,6 +264,11 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr) minmax(110px, 150px) minmax(110px, 130px);
   }
 
+  .ledger-filter {
+    @apply mb-3 grid gap-3;
+    grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) minmax(0, 1fr);
+  }
+
   .icon-picker {
     @apply mt-3 flex flex-wrap gap-2;
   }
@@ -315,14 +320,23 @@ button:disabled {
     @apply flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 font-bold;
   }
 
-  .ledger-row span {
+  .ledger-row-content {
+    @apply grid min-w-0 gap-1;
+  }
+
+  .ledger-row-content time {
+    @apply text-xs font-black text-slate-400;
+  }
+
+  .ledger-row-content span {
     @apply min-w-0 break-words;
   }
 
   @media (max-width: 920px) {
     .reward-form,
     .badge-form,
-    .ledger-form {
+    .ledger-form,
+    .ledger-filter {
       grid-template-columns: 1fr;
     }
   }
