@@ -416,10 +416,15 @@ function App() {
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
-    const task = { ...taskDraft, id: editingTaskId ?? crypto.randomUUID(), title: taskDraft.title.trim(), createdAt: editingTaskId ? state.tasks.find((item) => item.id === editingTaskId)?.createdAt ?? nowIso() : nowIso() };
+    const task = normalizeTaskPoints({
+      ...taskDraft,
+      id: editingTaskId ?? crypto.randomUUID(),
+      title: taskDraft.title.trim(),
+      createdAt: editingTaskId ? state.tasks.find((item) => item.id === editingTaskId)?.createdAt ?? nowIso() : nowIso(),
+    });
     if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, task);
     else await addCloudTask(familyCode, task);
-    setTaskDraft(emptyTask());
+    setTaskDraft(editingTaskId ? emptyTask() : getNextTaskDraft(taskDraft));
     setEditingTaskId(null);
     await load();
   };
@@ -942,7 +947,7 @@ function App() {
                   </label>
                 </div>
                 <div className="mt-3 rounded-2xl bg-slate-50 p-4">
-                  <button className={`reward-toggle ${taskDraft.autoComplete ? "reward-toggle-on" : ""}`} onClick={() => setTaskDraft({ ...taskDraft, autoComplete: !taskDraft.autoComplete })}>
+                  <button className={`reward-toggle ${taskDraft.autoComplete ? "reward-toggle-on" : ""}`} onClick={() => setTaskDraft(toggleTaskPoints(taskDraft))}>
                     <span>
                       <GraduationCap size={18} />
                     </span>
@@ -1791,6 +1796,38 @@ function getTaskLocalTimePart(value?: string) {
 
 function getSubjectSortRank(subjects: Subject[], name: string) {
   return subjects.find((subject) => subject.name === name)?.sortOrder ?? 999;
+}
+
+function getNextTaskDraft(draft: Omit<Task, "id" | "createdAt">): Omit<Task, "id" | "createdAt"> {
+  const points = normalizeTaskPoints(draft);
+  return {
+    ...points,
+    title: "",
+    description: "",
+    actualMinutes: 0,
+    startTime: undefined,
+    endTime: undefined,
+    status: "pending",
+  };
+}
+
+function toggleTaskPoints(draft: Omit<Task, "id" | "createdAt">): Omit<Task, "id" | "createdAt"> {
+  if (draft.autoComplete) {
+    return { ...draft, autoComplete: false, rewardPoints: 0, penaltyPoints: 0, overduePoints: 0 };
+  }
+  return { ...draft, autoComplete: true, rewardPoints: draft.rewardPoints || 1, penaltyPoints: draft.penaltyPoints || 1, overduePoints: draft.overduePoints || 0 };
+}
+
+function normalizeTaskPoints<T extends Pick<Task, "autoComplete" | "rewardPoints" | "penaltyPoints" | "overduePoints">>(task: T): T {
+  if (task.autoComplete) {
+    return {
+      ...task,
+      rewardPoints: Number(task.rewardPoints) || 0,
+      penaltyPoints: Number(task.penaltyPoints) || 0,
+      overduePoints: Number(task.overduePoints) || 0,
+    };
+  }
+  return { ...task, rewardPoints: 0, penaltyPoints: 0, overduePoints: 0 };
 }
 
 function filterLedger(ledger: PointLedger[], range: LedgerRange, customFrom: string, customTo: string) {
