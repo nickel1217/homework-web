@@ -80,6 +80,7 @@ type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "s
 type TaskSort = "default" | "time" | "subject" | "type" | "status";
 type LedgerRange = "7d" | "30d" | "all" | "custom";
 type TaskStartConflict = { runningTask: Task; nextTask: Task };
+type RepeatTaskAction = { action: "edit" | "delete"; task: Task };
 
 type AppState = {
   tasks: Task[];
@@ -230,6 +231,8 @@ function App() {
   const [focusTask, setFocusTask] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
   const [taskStartConflict, setTaskStartConflict] = useState<TaskStartConflict | null>(null);
+  const [repeatTaskAction, setRepeatTaskAction] = useState<RepeatTaskAction | null>(null);
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
@@ -252,7 +255,9 @@ function App() {
       const stalePausedTasks = await pauseStaleRunningTasks(withRepeats.tasks);
       await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges, withRepeats.exams, withRepeats.settings?.[0]?.badgeStartDate);
       const refreshed = await fetchCloudData(familyCode);
+      const loadedDeletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
       const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友", badgeStartDate: today() };
+      setDeletedTaskIds(loadedDeletedTaskIds);
       setState({
         tasks: refreshed.tasks,
         exams: refreshed.exams,
@@ -349,7 +354,7 @@ function App() {
     }
   }, [activeTab, userRole]);
 
-  const todayTasks = state.tasks.filter((task) => taskOverlapsDate(task, today()));
+  const todayTasks = state.tasks.filter((task) => taskOverlapsDate(task, today(), deletedTaskIds));
   const subjects = state.subjects.length > 0 ? state.subjects : fallbackSubjects;
   const visibleSubjects = subjects.filter((subject) => subject.showOnHome);
   const visibleTabs = tabs.filter((tab) => userRole === "parent" || !["subjects", "settings"].includes(tab.id));
@@ -359,7 +364,7 @@ function App() {
   const filteredTasks = sortTasks(
     state.tasks.filter(
       (task) =>
-        taskOverlapsDate(task, selectedTaskDate) &&
+        taskOverlapsDate(task, selectedTaskDate, deletedTaskIds) &&
         (!hideCompletedTasks || task.status !== "completed") &&
         (taskSubjectFilter === "全部学科" || task.category === taskSubjectFilter) &&
         (taskTypeFilter === "全部类别" || task.assignmentType === taskTypeFilter) &&
@@ -389,7 +394,7 @@ function App() {
     }
     for (const task of state.tasks) {
       for (const date of statsDates) {
-        if (!taskOverlapsDate(task, date)) continue;
+        if (!taskOverlapsDate(task, date, deletedTaskIds)) continue;
         const item = map.get(date);
         if (!item) continue;
         item.minutes += getTaskMinutesForDate(task, date);
@@ -399,11 +404,11 @@ function App() {
       }
     }
     return [...map.values()];
-  }, [state.tasks, statsDates]);
+  }, [state.tasks, statsDates, deletedTaskIds]);
   const subjectTimeStats = useMemo(() => {
     const map = new Map<string, { label: string; date: string; subject: string; minutes: number; planned: number; completed: number; total: number }>();
     for (const task of state.tasks) {
-      if (!taskOverlapsDate(task, statsDate)) continue;
+      if (!taskOverlapsDate(task, statsDate, deletedTaskIds)) continue;
       const item = map.get(task.category) ?? { label: task.category, date: statsDate, subject: task.category, minutes: 0, planned: 0, completed: 0, total: 0 };
       item.minutes += getTaskMinutesForDate(task, statsDate);
       item.planned += task.plannedMinutes ?? 0;
@@ -412,7 +417,7 @@ function App() {
       map.set(task.category, item);
     }
     return [...map.values()];
-  }, [state.tasks, statsDate]);
+  }, [state.tasks, statsDate, deletedTaskIds]);
   const timeComparisonStats = statsRange === "day" ? subjectTimeStats : dailyTimeStats;
   const timeComparisonTitle = statsRange === "day" ? "各学科计划用时 / 实际用时" : "每日计划用时 / 实际用时";
   const completionTitle = statsRange === "day" ? "各学科完成任务" : "每日完成任务";
@@ -425,12 +430,12 @@ function App() {
     const map = new Map<string, number>();
     for (const task of state.tasks) {
       for (const date of statsDates) {
-        if (!taskOverlapsDate(task, date)) continue;
+        if (!taskOverlapsDate(task, date, deletedTaskIds)) continue;
         map.set(task.category, (map.get(task.category) ?? 0) + getTaskMinutesForDate(task, date));
       }
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
-  }, [state.tasks, statsDates]);
+  }, [state.tasks, statsDates, deletedTaskIds]);
   const filteredLedger = useMemo(() => filterLedger(state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo), [state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo]);
 
   const addTask = async () => {
@@ -446,6 +451,23 @@ function App() {
     setTaskDraft(editingTaskId ? emptyTask() : getNextTaskDraft(taskDraft));
     setEditingTaskId(null);
     await load();
+  };
+
+  const requestEditTask = (task: Task) => {
+    if (isRepeatRelatedTask(task, state.tasks)) {
+      setRepeatTaskAction({ action: "edit", task });
+      return;
+    }
+    editTask(task);
+  };
+
+  const editRepeatTask = (task: Task, scope: "single" | "series") => {
+    setRepeatTaskAction(null);
+    if (scope === "series") {
+      editTask(getRepeatTemplateForTask(task, state.tasks) ?? task);
+      return;
+    }
+    editTask(task);
   };
 
   const enterAsStudent = () => {
@@ -470,20 +492,36 @@ function App() {
     setActiveTab("dashboard");
   };
 
-  const deleteTask = async (task: Task) => {
+  const requestDeleteTask = (task: Task) => {
+    if (isRepeatRelatedTask(task, state.tasks)) {
+      setRepeatTaskAction({ action: "delete", task });
+      return;
+    }
+    setTaskToDelete(task);
+  };
+
+  const deleteTask = async (task: Task, scope: "single" | "series" = "single") => {
     setBusyTaskId(task.id);
     try {
       setCloudStatus(`正在删除：${task.title}`);
-      if (isRepeatInstanceTask(task)) await addCloudTaskDeletion(familyCode, task.id);
-      await deleteCloudTask(familyCode, task.id);
+      const tasksToDelete = scope === "series" ? getRepeatSeriesTasks(task, state.tasks) : [task];
+      if (scope === "single") {
+        const deletionId = getRepeatDeletionIdForTask(task);
+        if (deletionId) {
+          await addCloudTaskDeletion(familyCode, deletionId);
+          setDeletedTaskIds((current) => new Set([...current, deletionId]));
+        }
+      }
+      await Promise.all(tasksToDelete.map((item) => deleteCloudTask(familyCode, item.id)));
       setState((current) => ({
         ...current,
-        tasks: current.tasks.filter((item) => item.id !== task.id),
+        tasks: current.tasks.filter((item) => !tasksToDelete.some((deletedTask) => deletedTask.id === item.id)),
       }));
-      if (editingTaskId === task.id) cancelTaskEdit();
-      if (focusTask?.id === task.id) setFocusTask(null);
+      if (editingTaskId && tasksToDelete.some((item) => item.id === editingTaskId)) cancelTaskEdit();
+      if (focusTask && tasksToDelete.some((item) => item.id === focusTask.id)) setFocusTask(null);
       setTaskToDelete(null);
-      setCloudStatus(`已删除：${task.title}`);
+      setRepeatTaskAction(null);
+      setCloudStatus(scope === "series" ? `已删除重复序列：${task.title}` : `已删除：${task.title}`);
       await load();
     } catch (error) {
       setCloudStatus(error instanceof Error ? error.message : "任务删除失败");
@@ -1179,6 +1217,7 @@ function App() {
                           {getTaskStatusLabel(task.status)}
                         </span>
                         <span className="pill status-pending">{task.assignmentType ?? "课外作业"}</span>
+                        {isRepeatRelatedTask(task, state.tasks) && <span className="pill status-running">重复 · {getRepeatCycleLabel(task, state.tasks)}</span>}
                       </div>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
                       <p className="mt-2 text-slate-600">
@@ -1211,10 +1250,10 @@ function App() {
                           </button>
                         </>
                       )}
-                      <button className="secondary-button" onClick={() => editTask(task)}>
+                      <button className="secondary-button" onClick={() => requestEditTask(task)}>
                         设置
                       </button>
-                      <button className="icon-button" disabled={busyTaskId === task.id} onClick={() => setTaskToDelete(task)} aria-label="删除任务">
+                      <button className="icon-button" disabled={busyTaskId === task.id} onClick={() => requestDeleteTask(task)} aria-label="删除任务">
                         {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
                       </button>
                     </div>
@@ -1724,6 +1763,43 @@ function App() {
           </section>
         </div>
       )}
+      {repeatTaskAction && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-blue-950/70 p-4">
+          <section className="w-full max-w-lg rounded-[28px] bg-white p-6 shadow-soft">
+            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-blue-50 text-blue-600">
+              {repeatTaskAction.action === "edit" ? <Pencil size={28} /> : <Trash2 size={28} />}
+            </div>
+            <h2 className="mt-4 text-center text-2xl font-black">{repeatTaskAction.action === "edit" ? "修改重复作业" : "删除重复作业"}</h2>
+            <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-center font-bold text-slate-600">
+              {repeatTaskAction.task.category} · {repeatTaskAction.task.title}
+              <br />
+              <span className="text-sm text-slate-500">重复周期：{getRepeatCycleLabel(repeatTaskAction.task, state.tasks)}</span>
+            </p>
+            <div className="mt-5 grid gap-3">
+              {!isRepeatTemplateTask(repeatTaskAction.task) && (
+                <button
+                  className={repeatTaskAction.action === "edit" ? "secondary-button justify-center" : "danger-button justify-center"}
+                  disabled={busyTaskId === repeatTaskAction.task.id}
+                  onClick={() => (repeatTaskAction.action === "edit" ? editRepeatTask(repeatTaskAction.task, "single") : deleteTask(repeatTaskAction.task, "single"))}
+                >
+                  {repeatTaskAction.action === "edit" ? "只修改这一次" : "只删除这一次"}
+                </button>
+              )}
+              <button
+                className={repeatTaskAction.action === "edit" ? "primary-button justify-center" : "danger-button justify-center"}
+                disabled={busyTaskId === repeatTaskAction.task.id}
+                onClick={() => (repeatTaskAction.action === "edit" ? editRepeatTask(repeatTaskAction.task, "series") : deleteTask(repeatTaskAction.task, "series"))}
+              >
+                {busyTaskId === repeatTaskAction.task.id ? <Loader2 className="animate-spin" size={20} /> : repeatTaskAction.action === "edit" ? <Pencil size={20} /> : <Trash2 size={20} />}
+                {repeatTaskAction.action === "edit" ? "修改整个重复序列" : "删除整个重复序列"}
+              </button>
+              <button className="secondary-button justify-center" disabled={busyTaskId === repeatTaskAction.task.id} onClick={() => setRepeatTaskAction(null)}>
+                取消
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {taskStartConflict && (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-blue-950/70 p-4">
           <section className="w-full max-w-lg rounded-[28px] bg-white p-6 shadow-soft">
@@ -2003,7 +2079,8 @@ function getElapsedWholeMinutes(startedAt: number) {
   return Math.max(0, Math.floor((Date.now() - startedAt) / 60000));
 }
 
-function taskOverlapsDate(task: Task, date: string) {
+function taskOverlapsDate(task: Task, date: string, deletedTaskIds: Set<string> = new Set()) {
+  if (isRepeatOccurrenceDeletedOnDate(task, date, deletedTaskIds)) return false;
   if (task.repeatType !== "none") return task.startDate === date;
   const endDate = getTaskVisibleEndDate(task);
   return task.startDate <= date && date <= endDate;
@@ -2057,8 +2134,60 @@ function getRepeatInstanceId(task: Task, date: string) {
   return `repeat:${task.id}:${date}`;
 }
 
+function getRepeatTemplateIdFromInstance(task: Task) {
+  if (!task.id.startsWith("repeat:")) return undefined;
+  const [, templateId] = task.id.split(":");
+  return templateId || undefined;
+}
+
+function getRepeatTemplateForTask(task: Task, tasks: Task[]) {
+  if (isRepeatTemplateTask(task)) return task;
+  const templateId = getRepeatTemplateIdFromInstance(task);
+  return templateId ? tasks.find((item) => item.id === templateId) : undefined;
+}
+
+function isRepeatTemplateTask(task: Task) {
+  return task.repeatType !== "none";
+}
+
 function isRepeatInstanceTask(task: Task) {
   return task.repeatType === "none" && task.id.startsWith("repeat:");
+}
+
+function isRepeatRelatedTask(task: Task, tasks: Task[]) {
+  return isRepeatTemplateTask(task) || Boolean(getRepeatTemplateForTask(task, tasks));
+}
+
+function getRepeatSeriesTasks(task: Task, tasks: Task[]) {
+  const template = getRepeatTemplateForTask(task, tasks);
+  if (!template) return [task];
+  return tasks.filter((item) => item.id === template.id || item.id.startsWith(`repeat:${template.id}:`));
+}
+
+function getRepeatDeletionIdForTask(task: Task) {
+  if (isRepeatInstanceTask(task)) return task.id;
+  if (isRepeatTemplateTask(task)) return getRepeatInstanceId(task, task.startDate);
+  return undefined;
+}
+
+function isRepeatOccurrenceDeletedOnDate(task: Task, date: string, deletedTaskIds: Set<string>) {
+  if (deletedTaskIds.size === 0) return false;
+  if (isRepeatInstanceTask(task)) return deletedTaskIds.has(task.id);
+  if (isRepeatTemplateTask(task)) return deletedTaskIds.has(getRepeatInstanceId(task, date));
+  return false;
+}
+
+function getRepeatCycleLabel(task: Task, tasks: Task[]) {
+  const template = getRepeatTemplateForTask(task, tasks) ?? task;
+  if (template.repeatType === "daily") return "每天";
+  if (template.repeatType === "weekly") return `每周${getRepeatWeekdaysLabel(template.repeatDays)}`;
+  return "重复";
+}
+
+function getRepeatWeekdaysLabel(days?: number[]) {
+  if (!days || days.length === 0) return "";
+  const labels = ["一", "二", "三", "四", "五", "六", "日"];
+  return days.map((day) => labels[day] ?? "").join("、");
 }
 
 function toLocalDateInputValue(date: Date) {
