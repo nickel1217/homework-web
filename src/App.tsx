@@ -232,6 +232,7 @@ function App() {
   const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
   const [taskStartConflict, setTaskStartConflict] = useState<TaskStartConflict | null>(null);
   const [repeatTaskAction, setRepeatTaskAction] = useState<RepeatTaskAction | null>(null);
+  const [editingRepeatSeriesFrom, setEditingRepeatSeriesFrom] = useState<string | null>(null);
   const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
@@ -276,26 +277,23 @@ function App() {
     }
   };
 
-  const ensureRepeatInstances = async (tasks: Task[], targetDate = today(), onlyTargetDate = false) => {
+  const ensureRepeatInstances = async (tasks: Task[]) => {
     const deletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
-    const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
+    const existingIds = new Set(tasks.map((task) => task.id));
     const creates = tasks.flatMap((task) => {
-      const occurrenceDates = onlyTargetDate ? getRepeatOccurrenceDates(task, targetDate).filter((date) => date === targetDate) : getRepeatOccurrenceDates(task, targetDate);
-      return occurrenceDates.flatMap((date) => {
-        const occurrenceKey = `${date}::${task.category}::${task.title}`;
-        if (existingKeys.has(occurrenceKey) || deletedTaskIds.has(getRepeatInstanceId(task, date))) return [];
-        existingKeys.add(occurrenceKey);
+      if (task.repeatType === "none" || isRepeatGeneratedInstanceTask(task) || !task.endDate) return [];
+      return getRepeatOccurrenceDates(task, task.endDate).flatMap((date) => {
+        const instanceId = getRepeatInstanceId(task, date);
+        if (existingIds.has(instanceId) || deletedTaskIds.has(instanceId)) return [];
+        existingIds.add(instanceId);
         return addCloudTask(familyCode, {
           ...task,
-          id: getRepeatInstanceId(task, date),
+          id: instanceId,
           status: "pending",
           actualMinutes: 0,
           startTime: undefined,
           endTime: undefined,
-          repeatType: "none",
-          repeatDays: undefined,
           startDate: date,
-          endDate: undefined,
           createdAt: nowIso(),
         });
       });
@@ -330,15 +328,6 @@ function App() {
   useEffect(() => {
     void load();
   }, [familyCode]);
-
-  useEffect(() => {
-    if (state.tasks.length === 0) return;
-    const ensureSelectedDateRepeats = async () => {
-      const createdCount = await ensureRepeatInstances(state.tasks, selectedTaskDate, true);
-      if (createdCount > 0) await load();
-    };
-    void ensureSelectedDateRepeats();
-  }, [familyCode, selectedTaskDate, state.tasks.length]);
 
   useEffect(() => {
     if (state.settings) {
@@ -450,16 +439,39 @@ function App() {
 
   const addTask = async () => {
     if (!taskDraft.title.trim()) return;
+    const currentEditingTask = editingTaskId ? state.tasks.find((item) => item.id === editingTaskId) : undefined;
     const task = normalizeTaskPoints({
       ...taskDraft,
       id: editingTaskId ?? crypto.randomUUID(),
       title: taskDraft.title.trim(),
-      createdAt: editingTaskId ? state.tasks.find((item) => item.id === editingTaskId)?.createdAt ?? nowIso() : nowIso(),
+      createdAt: editingTaskId ? currentEditingTask?.createdAt ?? nowIso() : nowIso(),
     });
-    if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, task);
-    else await addCloudTask(familyCode, task);
+    if (editingTaskId && editingRepeatSeriesFrom && currentEditingTask) {
+      const tasksToUpdate = getRepeatSeriesTasks(currentEditingTask, state.tasks, editingRepeatSeriesFrom);
+      await Promise.all(
+        tasksToUpdate.map((item) =>
+          updateCloudTask(familyCode, item.id, normalizeTaskPoints({
+            ...item,
+            category: task.category,
+            assignmentType: task.assignmentType,
+            title: task.title,
+            description: task.description,
+            plannedMinutes: task.plannedMinutes,
+            repeatType: task.repeatType,
+            repeatDays: task.repeatDays,
+            endDate: task.endDate,
+            autoComplete: task.autoComplete,
+            rewardPoints: task.rewardPoints,
+            penaltyPoints: task.penaltyPoints,
+            overduePoints: task.overduePoints,
+          })),
+        ),
+      );
+    } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, task);
+    else await Promise.all(buildRepeatSeriesTasks(task).map((item) => addCloudTask(familyCode, item)));
     setTaskDraft(editingTaskId ? emptyTask() : getNextTaskDraft(taskDraft));
     setEditingTaskId(null);
+    setEditingRepeatSeriesFrom(null);
     await load();
   };
 
@@ -474,9 +486,11 @@ function App() {
   const editRepeatTask = (task: Task, scope: "single" | "series") => {
     setRepeatTaskAction(null);
     if (scope === "series") {
-      editTask(getRepeatTemplateForTask(task, state.tasks) ?? task);
+      setEditingRepeatSeriesFrom(task.startDate);
+      editTask(task);
       return;
     }
+    setEditingRepeatSeriesFrom(null);
     editTask(task);
   };
 
@@ -514,13 +528,11 @@ function App() {
     setBusyTaskId(task.id);
     try {
       setCloudStatus(`正在删除：${task.title}`);
-      const tasksToDelete = scope === "series" ? getRepeatSeriesTasks(task, state.tasks) : [task];
-      if (scope === "single") {
-        const deletionId = getRepeatDeletionIdForTask(task);
-        if (deletionId) {
-          await addCloudTaskDeletion(familyCode, deletionId);
-          setDeletedTaskIds((current) => new Set([...current, deletionId]));
-        }
+      const tasksToDelete = scope === "series" ? getRepeatSeriesTasks(task, state.tasks, task.startDate) : [task];
+      const deletionIds = tasksToDelete.map(getRepeatDeletionIdForTask).filter((id): id is string => Boolean(id));
+      if (deletionIds.length > 0) {
+        await Promise.all(deletionIds.map((deletionId) => addCloudTaskDeletion(familyCode, deletionId)));
+        setDeletedTaskIds((current) => new Set([...current, ...deletionIds]));
       }
       await Promise.all(tasksToDelete.map((item) => deleteCloudTask(familyCode, item.id)));
       setState((current) => ({
@@ -565,6 +577,7 @@ function App() {
 
   const cancelTaskEdit = () => {
     setEditingTaskId(null);
+    setEditingRepeatSeriesFrom(null);
     setTaskDraft(emptyTask());
   };
 
@@ -2140,51 +2153,70 @@ function getRepeatOccurrenceDates(task: Task, todayDate: string) {
   return dates;
 }
 
+function buildRepeatSeriesTasks(task: Task) {
+  if (task.repeatType === "none" || !task.endDate) return [task];
+  return [task.startDate, ...getRepeatOccurrenceDates(task, task.endDate)].map((date, index) => ({
+    ...task,
+    id: index === 0 ? task.id : getRepeatInstanceId(task, date),
+    startDate: date,
+    status: "pending" as const,
+    actualMinutes: 0,
+    startTime: undefined,
+    endTime: undefined,
+    createdAt: index === 0 ? task.createdAt : nowIso(),
+  }));
+}
+
 function getRepeatInstanceId(task: Task, date: string) {
   return `repeat:${task.id}:${date}`;
 }
 
-function getRepeatTemplateIdFromInstance(task: Task) {
+function getRepeatSeriesId(task: Task) {
   if (!task.id.startsWith("repeat:")) return undefined;
   const [, templateId] = task.id.split(":");
   return templateId || undefined;
 }
 
+function getRepeatRootId(task: Task) {
+  return getRepeatSeriesId(task) ?? (task.repeatType !== "none" ? task.id : undefined);
+}
+
 function getRepeatTemplateForTask(task: Task, tasks: Task[]) {
-  if (isRepeatTemplateTask(task)) return task;
-  const templateId = getRepeatTemplateIdFromInstance(task);
-  return templateId ? tasks.find((item) => item.id === templateId) : undefined;
+  const rootId = getRepeatRootId(task);
+  return rootId ? tasks.find((item) => item.id === rootId) : undefined;
+}
+
+function isRepeatGeneratedInstanceTask(task: Task) {
+  return task.id.startsWith("repeat:");
 }
 
 function isRepeatTemplateTask(task: Task) {
-  return task.repeatType !== "none";
+  return false;
 }
 
 function isRepeatInstanceTask(task: Task) {
-  return task.repeatType === "none" && task.id.startsWith("repeat:");
+  return task.id.startsWith("repeat:");
 }
 
 function isRepeatRelatedTask(task: Task, tasks: Task[]) {
-  return isRepeatTemplateTask(task) || Boolean(getRepeatTemplateForTask(task, tasks));
+  const rootId = getRepeatRootId(task);
+  if (!rootId) return false;
+  return task.repeatType !== "none" || tasks.some((item) => item.id !== task.id && (item.id === rootId || item.id.startsWith(`repeat:${rootId}:`)));
 }
 
-function getRepeatSeriesTasks(task: Task, tasks: Task[]) {
-  const template = getRepeatTemplateForTask(task, tasks);
-  if (!template) return [task];
-  return tasks.filter((item) => item.id === template.id || item.id.startsWith(`repeat:${template.id}:`));
+function getRepeatSeriesTasks(task: Task, tasks: Task[], fromDate = task.startDate) {
+  const rootId = getRepeatRootId(task);
+  if (!rootId) return [task];
+  return tasks.filter((item) => (item.id === rootId || item.id.startsWith(`repeat:${rootId}:`)) && item.startDate >= fromDate);
 }
 
 function getRepeatDeletionIdForTask(task: Task) {
-  if (isRepeatInstanceTask(task)) return task.id;
-  if (isRepeatTemplateTask(task)) return getRepeatInstanceId(task, task.startDate);
-  return undefined;
+  return getRepeatRootId(task) ? task.id : undefined;
 }
 
 function isRepeatOccurrenceDeletedOnDate(task: Task, date: string, deletedTaskIds: Set<string>) {
   if (deletedTaskIds.size === 0) return false;
-  if (isRepeatInstanceTask(task)) return deletedTaskIds.has(task.id);
-  if (isRepeatTemplateTask(task)) return deletedTaskIds.has(getRepeatInstanceId(task, date));
-  return false;
+  return task.startDate === date && deletedTaskIds.has(task.id);
 }
 
 function getRepeatCycleLabel(task: Task, tasks: Task[]) {
