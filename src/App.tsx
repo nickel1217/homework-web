@@ -276,12 +276,12 @@ function App() {
     }
   };
 
-  const ensureRepeatInstances = async (tasks: Task[]) => {
-    const todayDate = today();
+  const ensureRepeatInstances = async (tasks: Task[], targetDate = today(), onlyTargetDate = false) => {
     const deletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
     const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
     const creates = tasks.flatMap((task) => {
-      return getRepeatOccurrenceDates(task, todayDate).flatMap((date) => {
+      const occurrenceDates = onlyTargetDate ? getRepeatOccurrenceDates(task, targetDate).filter((date) => date === targetDate) : getRepeatOccurrenceDates(task, targetDate);
+      return occurrenceDates.flatMap((date) => {
         const occurrenceKey = `${date}::${task.category}::${task.title}`;
         if (existingKeys.has(occurrenceKey) || deletedTaskIds.has(getRepeatInstanceId(task, date))) return [];
         existingKeys.add(occurrenceKey);
@@ -301,6 +301,7 @@ function App() {
       });
     });
     await Promise.all(creates);
+    return creates.length;
   };
 
   const applyOverduePenalties = async (tasks: Task[]) => {
@@ -329,6 +330,15 @@ function App() {
   useEffect(() => {
     void load();
   }, [familyCode]);
+
+  useEffect(() => {
+    if (state.tasks.length === 0) return;
+    const ensureSelectedDateRepeats = async () => {
+      const createdCount = await ensureRepeatInstances(state.tasks, selectedTaskDate, true);
+      if (createdCount > 0) await load();
+    };
+    void ensureSelectedDateRepeats();
+  }, [familyCode, selectedTaskDate, state.tasks.length]);
 
   useEffect(() => {
     if (state.settings) {
