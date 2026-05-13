@@ -77,6 +77,7 @@ import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, S
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "subjects" | "settings";
 type TaskSort = "default" | "time" | "subject" | "type" | "status";
 type LedgerRange = "7d" | "30d" | "all" | "custom";
+type TaskStartConflict = { runningTask: Task; nextTask: Task };
 
 type AppState = {
   tasks: Task[];
@@ -226,6 +227,7 @@ function App() {
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+  const [taskStartConflict, setTaskStartConflict] = useState<TaskStartConflict | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
@@ -245,6 +247,7 @@ function App() {
       await applyOverduePenalties(data.tasks);
       await ensureRepeatInstances(data.tasks);
       const withRepeats = await fetchCloudData(familyCode);
+      const stalePausedTasks = await pauseStaleRunningTasks(withRepeats.tasks);
       await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges, withRepeats.exams, withRepeats.settings?.[0]?.badgeStartDate);
       const refreshed = await fetchCloudData(familyCode);
       const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友", badgeStartDate: today() };
@@ -258,7 +261,7 @@ function App() {
         settings,
         points: getPointBalance(refreshed.ledger ?? []),
       });
-      setCloudStatus(`已连接家庭同步码：${familyCode}`);
+      setCloudStatus(stalePausedTasks.length > 0 ? `已自动暂停跨日作业：${stalePausedTasks.map((task) => task.title).join("、")}` : `已连接家庭同步码：${familyCode}`);
     } catch (error) {
       setCloudStatus(error instanceof Error ? error.message : "Supabase 连接失败");
     } finally {
@@ -301,6 +304,18 @@ function App() {
         if (task.penaltyPoints > 0) await addCloudLedger(familyCode, "adjust", -task.penaltyPoints, `未按期完成作业：${task.title}`);
       }),
     );
+  };
+
+  const pauseStaleRunningTasks = async (tasks: Task[]) => {
+    const todayDate = today();
+    const staleTasks = tasks.filter((task) => task.status === "running" && task.startTime && getLocalDateFromIso(task.startTime) < todayDate);
+    await Promise.all(
+      staleTasks.map((task) => {
+        const actualMinutes = (task.actualMinutes ?? 0) + getTaskRunMinutesUntilEndOfStartDay(task);
+        return updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+      }),
+    );
+    return staleTasks;
   };
 
   useEffect(() => {
@@ -501,7 +516,14 @@ function App() {
     setTaskDraft(emptyTask());
   };
 
-  const startTask = async (task: Task) => {
+  const startTask = async (task: Task, options: { skipRunningCheck?: boolean } = {}) => {
+    if (!options.skipRunningCheck) {
+      const runningTask = state.tasks.find((item) => item.status === "running" && item.id !== task.id);
+      if (runningTask) {
+        setTaskStartConflict({ runningTask, nextTask: task });
+        return false;
+      }
+    }
     setBusyTaskId(task.id);
     try {
       const startTime = nowIso();
@@ -512,9 +534,42 @@ function App() {
       }));
       setCloudStatus(`已开始：${task.title}`);
       await load();
+      return true;
     } catch (error) {
       setCloudStatus(error instanceof Error ? error.message : "任务开始失败");
+      return false;
     } finally {
+      setBusyTaskId(null);
+    }
+  };
+
+  const confirmStartAfterPause = async () => {
+    if (!taskStartConflict) return;
+    const { runningTask, nextTask } = taskStartConflict;
+    setBusyTaskId(runningTask.id);
+    try {
+      const runningTasks = state.tasks.filter((task) => task.status === "running" && task.id !== nextTask.id);
+      await Promise.all(
+        runningTasks.map((task) => {
+          const actualMinutes = (task.actualMinutes ?? 0) + getTaskRunMinutes(task);
+          return updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+        }),
+      );
+      setState((current) => ({
+        ...current,
+        tasks: current.tasks.map((item) => {
+          const pausedTask = runningTasks.find((task) => task.id === item.id);
+          if (!pausedTask) return item;
+          return { ...item, status: "paused", startTime: undefined, actualMinutes: (pausedTask.actualMinutes ?? 0) + getTaskRunMinutes(pausedTask) };
+        }),
+      }));
+      if (focusTask && runningTasks.some((task) => task.id === focusTask.id)) {
+        setFocusTask({ ...focusTask, status: "paused", startTime: undefined, actualMinutes: getTaskElapsedMinutes(focusTask) });
+      }
+      setTaskStartConflict(null);
+      await startTask(nextTask, { skipRunningCheck: true });
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "切换作业失败");
       setBusyTaskId(null);
     }
   };
@@ -1665,6 +1720,28 @@ function App() {
           </section>
         </div>
       )}
+      {taskStartConflict && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-blue-950/70 p-4">
+          <section className="w-full max-w-lg rounded-[28px] bg-white p-6 shadow-soft">
+            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-blue-50 text-blue-600">
+              <Clock size={28} />
+            </div>
+            <h2 className="mt-4 text-center text-2xl font-black">已有作业正在进行</h2>
+            <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-center font-bold text-slate-600">
+              是否暂停「{taskStartConflict.runningTask.title}」作业，并开始「{taskStartConflict.nextTask.title}」？
+            </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button className="secondary-button justify-center" disabled={busyTaskId === taskStartConflict.runningTask.id} onClick={() => setTaskStartConflict(null)}>
+                取消
+              </button>
+              <button className="primary-button justify-center" disabled={busyTaskId === taskStartConflict.runningTask.id} onClick={confirmStartAfterPause}>
+                {busyTaskId === taskStartConflict.runningTask.id ? <Loader2 className="animate-spin" size={20} /> : <Clock size={20} />}
+                {busyTaskId === taskStartConflict.runningTask.id ? "正在切换" : "暂停并开始"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {focusTask && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-blue-950/70 p-4">
           <section className="w-full max-w-2xl rounded-[32px] bg-white p-6 text-center shadow-soft">
@@ -1682,8 +1759,8 @@ function App() {
                 <button
                   className="secondary-button"
                   onClick={async () => {
-                    await startTask(focusTask);
-                    setFocusTask({ ...focusTask, status: "running", startTime: nowIso() });
+                    const started = await startTask(focusTask);
+                    if (started) setFocusTask({ ...focusTask, status: "running", startTime: nowIso() });
                   }}
                 >
                   <Clock size={20} /> {focusTask.status === "paused" ? "继续专注" : "开始专注"}
@@ -1905,6 +1982,16 @@ function getTaskRunMinutes(task: Task) {
   if (task.status !== "running" || !task.startTime) return 0;
   const startedAt = new Date(task.startTime).getTime();
   return getElapsedWholeMinutes(startedAt);
+}
+
+function getTaskRunMinutesUntilEndOfStartDay(task: Task) {
+  if (!task.startTime) return 0;
+  const startedAt = new Date(task.startTime);
+  if (Number.isNaN(startedAt.getTime())) return 0;
+  const endOfStartDay = new Date(startedAt);
+  endOfStartDay.setHours(24, 0, 0, 0);
+  const endedAt = Math.min(endOfStartDay.getTime(), Date.now());
+  return Math.max(0, Math.floor((endedAt - startedAt.getTime()) / 60000));
 }
 
 function getElapsedWholeMinutes(startedAt: number) {
