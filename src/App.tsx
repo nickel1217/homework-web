@@ -225,6 +225,7 @@ function App() {
   const [ocrText, setOcrText] = useState("");
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>({
     id: "default",
@@ -451,9 +452,25 @@ function App() {
     setActiveTab("dashboard");
   };
 
-  const deleteTask = async (id: string) => {
-    await deleteCloudTask(familyCode, id);
-    await load();
+  const deleteTask = async (task: Task) => {
+    setBusyTaskId(task.id);
+    try {
+      setCloudStatus(`正在删除：${task.title}`);
+      await deleteCloudTask(familyCode, task.id);
+      setState((current) => ({
+        ...current,
+        tasks: current.tasks.filter((item) => item.id !== task.id),
+      }));
+      if (editingTaskId === task.id) cancelTaskEdit();
+      if (focusTask?.id === task.id) setFocusTask(null);
+      setTaskToDelete(null);
+      setCloudStatus(`已删除：${task.title}`);
+      await load();
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "任务删除失败");
+    } finally {
+      setBusyTaskId(null);
+    }
   };
 
   const editTask = (task: Task) => {
@@ -1138,8 +1155,8 @@ function App() {
                       <button className="secondary-button" onClick={() => editTask(task)}>
                         设置
                       </button>
-                      <button className="icon-button" onClick={() => deleteTask(task.id)} aria-label="删除任务">
-                        <Trash2 size={20} />
+                      <button className="icon-button" disabled={busyTaskId === task.id} onClick={() => setTaskToDelete(task)} aria-label="删除任务">
+                        {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
                       </button>
                     </div>
                   </article>
@@ -1625,6 +1642,29 @@ function App() {
           )}
         </section>
       </div>
+      {taskToDelete && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-blue-950/70 p-4">
+          <section className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-soft">
+            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-red-50 text-red-500">
+              <Trash2 size={28} />
+            </div>
+            <h2 className="mt-4 text-center text-2xl font-black">确认删除作业？</h2>
+            <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-center font-bold text-slate-600">
+              {taskToDelete.category} · {taskToDelete.title}
+            </p>
+            <p className="mt-3 text-center text-sm font-bold text-slate-500">删除后不会再显示在计划和统计里。</p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button className="secondary-button justify-center" disabled={busyTaskId === taskToDelete.id} onClick={() => setTaskToDelete(null)}>
+                取消
+              </button>
+              <button className="danger-button justify-center" disabled={busyTaskId === taskToDelete.id} onClick={() => deleteTask(taskToDelete)}>
+                {busyTaskId === taskToDelete.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
+                {busyTaskId === taskToDelete.id ? "正在删除" : "确认删除"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {focusTask && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-blue-950/70 p-4">
           <section className="w-full max-w-2xl rounded-[32px] bg-white p-6 text-center shadow-soft">
