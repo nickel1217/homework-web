@@ -53,6 +53,7 @@ import {
   addCloudExam,
   addCloudLedger,
   addCloudTask,
+  addCloudTaskDeletion,
   DEFAULT_FAMILY_CODE,
   deleteCloudBadge,
   deleteCloudLedger,
@@ -60,6 +61,7 @@ import {
   deleteCloudTask,
   ensureCloudSeedData,
   fetchCloudData,
+  fetchCloudTaskDeletionIds,
   getPointBalance,
   refreshCloudBadges,
   restoreCloudBackup,
@@ -271,11 +273,12 @@ function App() {
 
   const ensureRepeatInstances = async (tasks: Task[]) => {
     const todayDate = today();
+    const deletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
     const existingKeys = new Set(tasks.map((task) => `${task.startDate}::${task.category}::${task.title}`));
     const creates = tasks.flatMap((task) => {
       return getRepeatOccurrenceDates(task, todayDate).flatMap((date) => {
         const occurrenceKey = `${date}::${task.category}::${task.title}`;
-        if (existingKeys.has(occurrenceKey)) return [];
+        if (existingKeys.has(occurrenceKey) || deletedTaskIds.has(getRepeatInstanceId(task, date))) return [];
         existingKeys.add(occurrenceKey);
         return addCloudTask(familyCode, {
           ...task,
@@ -471,6 +474,7 @@ function App() {
     setBusyTaskId(task.id);
     try {
       setCloudStatus(`正在删除：${task.title}`);
+      if (isRepeatInstanceTask(task)) await addCloudTaskDeletion(familyCode, task.id);
       await deleteCloudTask(familyCode, task.id);
       setState((current) => ({
         ...current,
@@ -2051,6 +2055,10 @@ function getRepeatOccurrenceDates(task: Task, todayDate: string) {
 
 function getRepeatInstanceId(task: Task, date: string) {
   return `repeat:${task.id}:${date}`;
+}
+
+function isRepeatInstanceTask(task: Task) {
+  return task.repeatType === "none" && task.id.startsWith("repeat:");
 }
 
 function toLocalDateInputValue(date: Date) {
