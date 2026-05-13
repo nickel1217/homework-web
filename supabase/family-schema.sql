@@ -97,6 +97,13 @@ create table if not exists public.family_settings (
   primary key (family_code, id)
 );
 
+create table if not exists public.family_task_deletions (
+  family_code text not null,
+  task_id text not null,
+  created_at text not null,
+  primary key (family_code, task_id)
+);
+
 alter table public.family_settings add column if not exists parent_password text not null default 'admin';
 alter table public.family_settings add column if not exists badge_start_date date;
 
@@ -104,12 +111,22 @@ create index if not exists family_tasks_family_code_idx on public.family_tasks (
 create index if not exists family_exams_family_code_idx on public.family_exams (family_code);
 create index if not exists family_ledger_family_code_idx on public.family_ledger (family_code);
 create index if not exists family_subjects_family_code_idx on public.family_subjects (family_code);
+create index if not exists family_task_deletions_family_code_idx on public.family_task_deletions (family_code);
 
 create or replace function public.skip_future_repeat_task_instances()
 returns trigger
 language plpgsql
 as $$
 begin
+  if exists (
+    select 1
+    from public.family_task_deletions deleted_task
+    where deleted_task.family_code = new.family_code
+      and deleted_task.task_id = new.id
+  ) then
+    return null;
+  end if;
+
   if new.id like 'repeat:%'
      and new.repeat_type = 'none'
      and new.start_date > to_char((now() at time zone 'Asia/Shanghai')::date, 'YYYY-MM-DD') then
@@ -131,6 +148,7 @@ alter table public.family_rewards enable row level security;
 alter table public.family_subjects enable row level security;
 alter table public.family_ledger enable row level security;
 alter table public.family_settings enable row level security;
+alter table public.family_task_deletions enable row level security;
 
 drop policy if exists "Anon can use family tasks" on public.family_tasks;
 create policy "Anon can use family tasks" on public.family_tasks for all using (true) with check (true);
@@ -152,5 +170,8 @@ create policy "Anon can use family ledger" on public.family_ledger for all using
 
 drop policy if exists "Anon can use family settings" on public.family_settings;
 create policy "Anon can use family settings" on public.family_settings for all using (true) with check (true);
+
+drop policy if exists "Anon can use family task deletions" on public.family_task_deletions;
+create policy "Anon can use family task deletions" on public.family_task_deletions for all using (true) with check (true);
 
 notify pgrst, 'reload schema';
