@@ -60,6 +60,7 @@ type LedgerRow = {
 };
 type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null; badge_start_date?: string | null };
 type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
+type TaskDeletionRow = { family_code: string; task_id: string; created_at: string };
 
 const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
   { id: "chinese", name: "语文", color: "#ef4444", show_on_home: true, sort_order: 1 },
@@ -170,6 +171,15 @@ export async function deleteCloudTask(familyCode: string, id: string) {
   if (error) throw error;
 }
 
+export async function addCloudTaskDeletion(familyCode: string, taskId: string) {
+  await upsertRows("family_task_deletions", [{ family_code: familyCode, task_id: taskId, created_at: new Date().toISOString() }]);
+}
+
+export async function fetchCloudTaskDeletionIds(familyCode: string) {
+  const rows = await selectRows<TaskDeletionRow>("family_task_deletions", familyCode, "created_at", false);
+  return new Set(rows.map((row) => row.task_id));
+}
+
 export async function addCloudExam(familyCode: string, exam: ExamRecord) {
   await upsertRows("family_exams", [toExamRow(familyCode, exam)]);
 }
@@ -241,6 +251,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
       deleteFamilyRows("family_rewards", familyCode),
       deleteFamilyRows("family_subjects", familyCode),
       deleteFamilyRows("family_ledger", familyCode),
+      deleteFamilyRows("family_task_deletions", familyCode),
       deleteFamilyRows("family_settings", familyCode),
     ]);
   }
