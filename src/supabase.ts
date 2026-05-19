@@ -61,6 +61,12 @@ type LedgerRow = {
 type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null; badge_start_date?: string | null };
 type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
 type TaskDeletionRow = { family_code: string; task_id: string; created_at: string };
+type TaskPatch = Partial<Omit<Task, "endDate" | "startTime" | "endTime" | "repeatDays">> & {
+  endDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  repeatDays?: number[] | null;
+};
 
 const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
   { id: "chinese", name: "语文", color: "#ef4444", show_on_home: true, sort_order: 1 },
@@ -161,7 +167,7 @@ export async function addCloudTask(familyCode: string, task: Task) {
   await upsertRows("family_tasks", [toTaskRow(familyCode, task)]);
 }
 
-export async function updateCloudTask(familyCode: string, id: string, changes: Partial<Task>) {
+export async function updateCloudTask(familyCode: string, id: string, changes: TaskPatch) {
   const { error } = await supabase.from("family_tasks").update(toTaskPatch(changes)).eq("family_code", familyCode).eq("id", id);
   if (error) throw error;
 }
@@ -373,7 +379,7 @@ function toTaskRow(familyCode: string, task: Task): TaskRow {
   };
 }
 
-function toTaskPatch(task: Partial<Task>) {
+function toTaskPatch(task: TaskPatch) {
   return compact({
     category: task.category,
     assignment_type: task.assignmentType,

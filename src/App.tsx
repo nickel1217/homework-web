@@ -397,8 +397,8 @@ function App() {
         const item = map.get(date);
         if (!item) continue;
         item.minutes += getTaskMinutesForDate(task, date);
-        item.planned += task.plannedMinutes ?? 0;
-        item.total += 1;
+        item.planned += getTaskPlannedMinutesForDate(task, date);
+        item.total += getTaskTodoCountForDate(task, date);
         if (isTaskCompletedOnDate(task, date)) item.completed += 1;
       }
     }
@@ -410,8 +410,8 @@ function App() {
       if (!taskOverlapsDate(task, statsDate, deletedTaskIds)) continue;
       const item = map.get(task.category) ?? { label: task.category, date: statsDate, subject: task.category, minutes: 0, planned: 0, completed: 0, total: 0 };
       item.minutes += getTaskMinutesForDate(task, statsDate);
-      item.planned += task.plannedMinutes ?? 0;
-      item.total += 1;
+      item.planned += getTaskPlannedMinutesForDate(task, statsDate);
+      item.total += getTaskTodoCountForDate(task, statsDate);
       if (isTaskCompletedOnDate(task, statsDate)) item.completed += 1;
       map.set(task.category, item);
     }
@@ -450,7 +450,7 @@ function App() {
       const tasksToUpdate = getRepeatSeriesTasks(currentEditingTask, state.tasks, editingRepeatSeriesFrom);
       await Promise.all(
         tasksToUpdate.map((item) =>
-          updateCloudTask(familyCode, item.id, normalizeTaskPoints({
+          updateCloudTask(familyCode, item.id, toEditableTaskPatch(normalizeTaskPoints({
             ...item,
             category: task.category,
             assignmentType: task.assignmentType,
@@ -464,10 +464,10 @@ function App() {
             rewardPoints: task.rewardPoints,
             penaltyPoints: task.penaltyPoints,
             overduePoints: task.overduePoints,
-          })),
+          }))),
         ),
       );
-    } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, task);
+    } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, toEditableTaskPatch(task));
     else await Promise.all(buildRepeatSeriesTasks(task).map((item) => addCloudTask(familyCode, item)));
     setTaskDraft(editingTaskId ? emptyTask() : getNextTaskDraft(taskDraft));
     setEditingTaskId(null);
@@ -1244,7 +1244,7 @@ function App() {
                       </div>
                       <h3 className="mt-3 text-2xl font-black">{task.title}</h3>
                       <p className="mt-2 text-slate-600">
-                        计划 {task.plannedMinutes ?? 0} 分钟 · 已学 {getTaskElapsedMinutes(task)} 分钟
+                        计划 {getTaskPlannedMinutesForDate(task, selectedTaskDate)} 分钟 · 已学 {getTaskElapsedMinutes(task)} 分钟
                         {task.autoComplete ? ` · 按时 ${task.rewardPoints} 分 · 逾期 ${task.overduePoints} 分 · 未完成 -${task.penaltyPoints} 分` : ""}
                       </p>
                       <p className="mt-1 text-sm font-bold text-slate-500">
@@ -2050,6 +2050,16 @@ function normalizeTaskPoints<T extends Pick<Task, "autoComplete" | "rewardPoints
   return { ...task, rewardPoints: 0, penaltyPoints: 0, overduePoints: 0 };
 }
 
+function toEditableTaskPatch(task: Task) {
+  return {
+    ...task,
+    endDate: task.endDate ?? null,
+    startTime: task.startTime ?? null,
+    endTime: task.endTime ?? null,
+    repeatDays: task.repeatDays ?? null,
+  };
+}
+
 function filterLedger(ledger: PointLedger[], range: LedgerRange, customFrom: string, customTo: string) {
   const sorted = [...ledger].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   if (range === "all") return sorted;
@@ -2079,6 +2089,34 @@ function getTaskMinutesForDate(task: Task, date: string) {
     return getLocalDateFromIso(task.startTime) === date ? getTaskElapsedMinutes(task) : 0;
   }
   return task.startDate === date ? task.actualMinutes ?? 0 : 0;
+}
+
+function getTaskPlannedMinutesForDate(task: Task, date: string) {
+  const plannedMinutes = task.plannedMinutes ?? 0;
+  if (!isMultiDaySingleTask(task)) return task.startDate === date ? plannedMinutes : 0;
+  if (getTaskEffectivePlanDate(task) !== date) return 0;
+  if (task.status === "completed") return plannedMinutes;
+  return Math.max(0, plannedMinutes - getTaskElapsedMinutes(task));
+}
+
+function getTaskTodoCountForDate(task: Task, date: string) {
+  if (!isMultiDaySingleTask(task)) return task.startDate === date ? 1 : 0;
+  return getTaskEffectivePlanDate(task) === date ? 1 : 0;
+}
+
+function getTaskEffectivePlanDate(task: Task) {
+  if (!isMultiDaySingleTask(task)) return task.startDate;
+  const completedDate = getTaskCompletedDate(task);
+  if (completedDate) return completedDate;
+  const dueDate = task.endDate ?? task.startDate;
+  const todayDate = today();
+  if (todayDate < task.startDate) return task.startDate;
+  if (todayDate > dueDate) return dueDate;
+  return todayDate;
+}
+
+function isMultiDaySingleTask(task: Task) {
+  return task.repeatType === "none" && Boolean(task.endDate && task.endDate > task.startDate);
 }
 
 function getTaskRunMinutes(task: Task) {
