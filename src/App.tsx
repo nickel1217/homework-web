@@ -153,7 +153,7 @@ const familyCodeKey = "homework-web-family-code";
 const ocrSettingsKey = "homework-web-local-ocr";
 const userRoleKey = "homework-web-user-role";
 
-function emptyTask(): Omit<Task, "id" | "createdAt"> {
+function emptyTask(startDate = today()): Omit<Task, "id" | "createdAt"> {
   return {
     category: "语文",
     assignmentType: "课堂作业",
@@ -163,7 +163,7 @@ function emptyTask(): Omit<Task, "id" | "createdAt"> {
     actualMinutes: 0,
     status: "pending",
     repeatType: "none",
-    startDate: today(),
+    startDate,
     autoComplete: false,
     rewardPoints: 1,
     penaltyPoints: 1,
@@ -188,6 +188,7 @@ function App() {
   });
   const [taskDraft, setTaskDraft] = useState(emptyTask());
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [currentDate, setCurrentDate] = useState(today());
   const [selectedTaskDate, setSelectedTaskDate] = useState(today());
   const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
   const [taskSubjectFilter, setTaskSubjectFilter] = useState("全部学科");
@@ -330,6 +331,20 @@ function App() {
   }, [familyCode]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => setCurrentDate(today()), 60000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (editingTaskId || taskDraft.title.trim() || taskDraft.description?.trim() || taskDraft.startDate >= currentDate) return;
+    setTaskDraft({
+      ...taskDraft,
+      startDate: currentDate,
+      endDate: taskDraft.endDate && taskDraft.endDate < currentDate ? undefined : taskDraft.endDate,
+    });
+  }, [currentDate, editingTaskId, taskDraft.description, taskDraft.endDate, taskDraft.startDate, taskDraft.title]);
+
+  useEffect(() => {
     if (state.settings) {
       setSettingsDraft({
         ...state.settings,
@@ -469,7 +484,7 @@ function App() {
       );
     } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, toEditableTaskPatch(task));
     else await Promise.all(buildRepeatSeriesTasks(task).map((item) => addCloudTask(familyCode, item)));
-    setTaskDraft(editingTaskId ? emptyTask() : getNextTaskDraft(taskDraft));
+    setTaskDraft(editingTaskId ? emptyTask(currentDate) : getNextTaskDraft(taskDraft, currentDate));
     setEditingTaskId(null);
     setEditingRepeatSeriesFrom(null);
     await load();
@@ -578,7 +593,7 @@ function App() {
   const cancelTaskEdit = () => {
     setEditingTaskId(null);
     setEditingRepeatSeriesFrom(null);
-    setTaskDraft(emptyTask());
+    setTaskDraft(emptyTask(currentDate));
   };
 
   const startTask = async (task: Task, options: { skipRunningCheck?: boolean } = {}) => {
@@ -2018,8 +2033,9 @@ function getSubjectSortRank(subjects: Subject[], name: string) {
   return subjects.find((subject) => subject.name === name)?.sortOrder ?? 999;
 }
 
-function getNextTaskDraft(draft: Omit<Task, "id" | "createdAt">): Omit<Task, "id" | "createdAt"> {
+function getNextTaskDraft(draft: Omit<Task, "id" | "createdAt">, currentDate = today()): Omit<Task, "id" | "createdAt"> {
   const points = normalizeTaskPoints(draft);
+  const startDate = draft.startDate < currentDate ? currentDate : draft.startDate;
   return {
     ...points,
     title: "",
@@ -2028,6 +2044,8 @@ function getNextTaskDraft(draft: Omit<Task, "id" | "createdAt">): Omit<Task, "id
     startTime: undefined,
     endTime: undefined,
     status: "pending",
+    startDate,
+    endDate: draft.endDate && draft.endDate < startDate ? undefined : draft.endDate,
   };
 }
 
