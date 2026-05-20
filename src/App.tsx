@@ -320,7 +320,7 @@ function App() {
     await Promise.all(
       staleTasks.map((task) => {
         const actualMinutes = (task.actualMinutes ?? 0) + getTaskRunMinutesUntilEndOfStartDay(task);
-        return updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+        return updateCloudTask(familyCode, task.id, { status: "paused", startTime: null, actualMinutes });
       }),
     );
     return staleTasks;
@@ -632,7 +632,7 @@ function App() {
       await Promise.all(
         runningTasks.map((task) => {
           const actualMinutes = (task.actualMinutes ?? 0) + getTaskRunMinutes(task);
-          return updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+          return updateCloudTask(familyCode, task.id, { status: "paused", startTime: null, actualMinutes });
         }),
       );
       setState((current) => ({
@@ -659,7 +659,7 @@ function App() {
     try {
       const elapsed = getTaskRunMinutes(task);
       const actualMinutes = (task.actualMinutes ?? 0) + elapsed;
-      await updateCloudTask(familyCode, task.id, { status: "paused", startTime: "", actualMinutes });
+      await updateCloudTask(familyCode, task.id, { status: "paused", startTime: null, actualMinutes });
       setState((current) => ({
         ...current,
         tasks: current.tasks.map((item) => (item.id === task.id ? { ...item, status: "paused", startTime: undefined, actualMinutes } : item)),
@@ -677,11 +677,9 @@ function App() {
     if (task.status === "completed") return;
     setBusyTaskId(task.id);
     try {
-      const startedAt = task.startTime ? new Date(task.startTime).getTime() : Date.now();
-      const elapsed = getElapsedWholeMinutes(startedAt);
-      const actualMinutes = task.status === "running" ? (task.actualMinutes ?? 0) + elapsed : (task.actualMinutes ?? 0);
+      const actualMinutes = getTaskActualMinutesOnComplete(task);
       const points = task.autoComplete ? (isTaskOverdue(task) ? task.overduePoints : task.rewardPoints) : 0;
-      await updateCloudTask(familyCode, task.id, { status: "completed", endTime: nowIso(), actualMinutes });
+      await updateCloudTask(familyCode, task.id, { status: "completed", startTime: task.status === "running" && task.startTime ? task.startTime : null, endTime: nowIso(), actualMinutes });
       if (points !== 0) await addCloudLedger(familyCode, points > 0 ? "earn" : "adjust", points, `${isTaskOverdue(task) ? "逾期完成" : "按时完成"}作业：${task.title}`);
       setCloudStatus(`已完成：${task.title}${points ? `，${points > 0 ? "+" : ""}${points} 分` : ""}`);
       await load();
@@ -2097,6 +2095,13 @@ function getTaskElapsedMinutes(task: Task) {
     return (task.actualMinutes ?? 0) + getTaskRunMinutes(task);
   }
   return task.actualMinutes ?? 0;
+}
+
+function getTaskActualMinutesOnComplete(task: Task) {
+  if (task.status !== "running" || !task.startTime) return task.actualMinutes ?? 0;
+  const runningDate = getLocalDateFromIso(task.startTime);
+  const elapsed = runningDate < today() ? getTaskRunMinutesUntilEndOfStartDay(task) : getTaskRunMinutes(task);
+  return (task.actualMinutes ?? 0) + elapsed;
 }
 
 function getTaskMinutesForDate(task: Task, date: string) {
