@@ -81,6 +81,7 @@ type TaskSort = "default" | "time" | "subject" | "type" | "status";
 type LedgerRange = "7d" | "30d" | "all" | "custom";
 type TaskStartConflict = { runningTask: Task; nextTask: Task };
 type RepeatTaskAction = { action: "edit" | "delete"; task: Task };
+type OcrDraftItem = OcrDraftTask & { draftId: string };
 
 type AppState = {
   tasks: Task[];
@@ -226,7 +227,7 @@ function App() {
   const [statsRange, setStatsRange] = useState<"day" | "week" | "month">("week");
   const [ocrWarning, setOcrWarning] = useState("");
   const [ocrStatus, setOcrStatus] = useState("");
-  const [ocrDrafts, setOcrDrafts] = useState<OcrDraftTask[]>([]);
+  const [ocrDrafts, setOcrDrafts] = useState<OcrDraftItem[]>([]);
   const [ocrText, setOcrText] = useState("");
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
@@ -910,7 +911,7 @@ function App() {
     setIsRecognizing(true);
     setOcrStatus("正在识别图片...");
     try {
-      const drafts = await recognizeHomeworkWithBaidu(file, ocrConfig);
+      const drafts = withOcrDraftIds(await recognizeHomeworkWithBaidu(file, ocrConfig));
       setOcrDrafts(drafts);
       setOcrStatus(drafts.length > 0 ? `识别到 ${drafts.length} 条内容，请确认后添加。` : "没有识别到可用文字。");
     } catch (error) {
@@ -921,16 +922,17 @@ function App() {
   };
 
   const parseManualText = () => {
-    const drafts = parseHomeworkText(ocrText);
+    const drafts = withOcrDraftIds(parseHomeworkText(ocrText));
     setOcrDrafts(drafts);
     setOcrStatus(drafts.length > 0 ? `拆解出 ${drafts.length} 条任务，请确认后添加。` : "没有拆解出可用任务。");
   };
 
-  const addOcrDraft = async (draft: OcrDraftTask) => {
+  const addOcrDraft = async (draft: OcrDraftItem) => {
     await addCloudTask(familyCode, {
       ...emptyTask(),
       id: crypto.randomUUID(),
       category: draft.category,
+      assignmentType: draft.assignmentType ?? "课堂作业",
       title: draft.title,
       description: draft.description,
       plannedMinutes: draft.plannedMinutes ?? 25,
@@ -941,8 +943,8 @@ function App() {
     await load();
   };
 
-  const updateOcrDraft = (index: number, changes: Partial<OcrDraftTask>) => {
-    setOcrDrafts((items) => items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...changes } : item)));
+  const updateOcrDraft = (draftId: string, changes: Partial<OcrDraftTask>) => {
+    setOcrDrafts((items) => items.map((item) => (item.draftId === draftId ? { ...item, ...changes } : item)));
   };
 
   if (!userRole) {
@@ -1166,15 +1168,20 @@ function App() {
                   {ocrDrafts.length > 0 && (
                     <div className="grid gap-3">
                       {ocrDrafts.map((draft, index) => (
-                        <div className="ocr-row" key={`${draft.title}-${index}`}>
-                          <div className="grid flex-1 gap-2 md:grid-cols-[120px_1fr_110px]">
-                            <select className="input" value={draft.category} onChange={(event) => updateOcrDraft(index, { category: event.target.value })}>
+                        <div className="ocr-row" key={draft.draftId}>
+                          <div className="grid flex-1 gap-2 md:grid-cols-[120px_120px_1fr_110px]">
+                            <select className="input" value={draft.category} onChange={(event) => updateOcrDraft(draft.draftId, { category: event.target.value })}>
                               {subjects.map((subject) => (
                                 <option key={subject.id}>{subject.name}</option>
                               ))}
                             </select>
-                            <input className="input" value={draft.title} onChange={(event) => updateOcrDraft(index, { title: event.target.value })} />
-                            <NumberInput value={draft.plannedMinutes ?? 25} suffix="分钟" onChange={(value) => updateOcrDraft(index, { plannedMinutes: value })} />
+                            <select className="input" value={draft.assignmentType ?? "课堂作业"} onChange={(event) => updateOcrDraft(draft.draftId, { assignmentType: event.target.value as Task["assignmentType"] })}>
+                              {assignmentTypes.map((type) => (
+                                <option key={type}>{type}</option>
+                              ))}
+                            </select>
+                            <input className="input" value={draft.title} onChange={(event) => updateOcrDraft(draft.draftId, { title: event.target.value })} />
+                            <NumberInput value={draft.plannedMinutes ?? 25} suffix="分钟" onChange={(value) => updateOcrDraft(draft.draftId, { plannedMinutes: value })} />
                           </div>
                           <button className="primary-button" onClick={() => addOcrDraft(draft)}>
                             <Plus size={20} /> 添加
@@ -2029,6 +2036,14 @@ function getTaskLocalTimePart(value?: string) {
 
 function getSubjectSortRank(subjects: Subject[], name: string) {
   return subjects.find((subject) => subject.name === name)?.sortOrder ?? 999;
+}
+
+function withOcrDraftIds(drafts: OcrDraftTask[]): OcrDraftItem[] {
+  return drafts.map((draft) => ({
+    ...draft,
+    assignmentType: draft.assignmentType ?? "课堂作业",
+    draftId: crypto.randomUUID(),
+  }));
 }
 
 function getNextTaskDraft(draft: Omit<Task, "id" | "createdAt">, currentDate = today()): Omit<Task, "id" | "createdAt"> {

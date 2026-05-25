@@ -1,6 +1,7 @@
 export type OcrDraftTask = {
   title: string;
   category: string;
+  assignmentType?: "课堂作业" | "课外作业";
   description?: string;
   plannedMinutes?: number;
   rewardPoints?: number;
@@ -73,6 +74,7 @@ export function parseHomeworkText(text: string): OcrDraftTask[] {
     return {
       title: cleanupTitle(line),
       category,
+      assignmentType: "课堂作业",
       plannedMinutes,
       rewardPoints: inferPoints(plannedMinutes),
       description: "来自 OCR/文本智能拆解，请确认后保存",
