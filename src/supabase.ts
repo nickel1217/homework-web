@@ -167,6 +167,10 @@ export async function addCloudTask(familyCode: string, task: Task) {
   await upsertRows("family_tasks", [toTaskRow(familyCode, task)]);
 }
 
+export async function addCloudTasks(familyCode: string, tasks: Task[]) {
+  await upsertRows("family_tasks", tasks.map((task) => toTaskRow(familyCode, task)));
+}
+
 export async function updateCloudTask(familyCode: string, id: string, changes: TaskPatch) {
   const { error } = await supabase.from("family_tasks").update(toTaskPatch(changes)).eq("family_code", familyCode).eq("id", id);
   if (error) throw error;

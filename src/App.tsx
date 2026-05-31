@@ -53,6 +53,7 @@ import {
   addCloudExam,
   addCloudLedger,
   addCloudTask,
+  addCloudTasks,
   addCloudTaskDeletion,
   DEFAULT_FAMILY_CODE,
   deleteCloudBadge,
@@ -283,25 +284,25 @@ function App() {
   const ensureRepeatInstances = async (tasks: Task[]) => {
     const deletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
     const existingIds = new Set(tasks.map((task) => task.id));
-    const creates = tasks.flatMap((task) => {
+    const creates: Task[] = tasks.flatMap((task) => {
       if (task.repeatType === "none" || isRepeatGeneratedInstanceTask(task)) return [];
       return getRepeatOccurrenceDates(task, getRepeatSeriesEndDate(task)).flatMap((date) => {
         const instanceId = getRepeatInstanceId(task, date);
         if (existingIds.has(instanceId) || deletedTaskIds.has(instanceId)) return [];
         existingIds.add(instanceId);
-        return addCloudTask(familyCode, {
+        return {
           ...task,
           id: instanceId,
-          status: "pending",
+          status: "pending" as const,
           actualMinutes: 0,
           startTime: undefined,
           endTime: undefined,
           startDate: date,
           createdAt: nowIso(),
-        });
+        };
       });
     });
-    await Promise.all(creates);
+    await addCloudTasks(familyCode, creates);
     return creates.length;
   };
 
@@ -485,7 +486,7 @@ function App() {
         ),
       );
     } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, toEditableTaskPatch(task));
-    else await Promise.all(buildRepeatSeriesTasks(task).map((item) => addCloudTask(familyCode, item)));
+    else await addCloudTasks(familyCode, buildRepeatSeriesTasks(task));
     setTaskDraft(editingTaskId ? emptyTask(currentDate) : getNextTaskDraft(taskDraft, currentDate));
     setEditingTaskId(null);
     setEditingRepeatSeriesFrom(null);
