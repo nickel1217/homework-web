@@ -107,6 +107,7 @@ const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
 
 const palette = ["#2563eb", "#16a34a", "#f59e0b", "#9333ea", "#ef4444", "#0d9488"];
 const assignmentTypes = ["课堂作业", "课外作业"] as const;
+const defaultRepeatHorizonDays = 90;
 const examTypes = ["单元测试", "随堂测试", "月考", "期中期末考试"];
 const grades = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "初一", "初二", "初三", "高一", "高二", "高三"];
 const semesters = ["上学期", "下学期"];
@@ -283,8 +284,8 @@ function App() {
     const deletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
     const existingIds = new Set(tasks.map((task) => task.id));
     const creates = tasks.flatMap((task) => {
-      if (task.repeatType === "none" || isRepeatGeneratedInstanceTask(task) || !task.endDate) return [];
-      return getRepeatOccurrenceDates(task, task.endDate).flatMap((date) => {
+      if (task.repeatType === "none" || isRepeatGeneratedInstanceTask(task)) return [];
+      return getRepeatOccurrenceDates(task, getRepeatSeriesEndDate(task)).flatMap((date) => {
         const instanceId = getRepeatInstanceId(task, date);
         if (existingIds.has(instanceId) || deletedTaskIds.has(instanceId)) return [];
         existingIds.add(instanceId);
@@ -1115,7 +1116,7 @@ function App() {
                 </div>
                 {taskDraft.repeatType === "weekly" && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {["日", "一", "二", "三", "四", "五", "六"].map((day, index) => {
+                    {["一", "二", "三", "四", "五", "六", "日"].map((day, index) => {
                       const selected = taskDraft.repeatDays?.includes(index);
                       return (
                         <button
@@ -2221,8 +2222,7 @@ function getRepeatOccurrenceDates(task: Task, todayDate: string) {
   if (endDate <= task.startDate) return [];
   const dates: string[] = [];
   for (let date = addLocalDays(task.startDate, 1); date <= endDate; date = addLocalDays(date, 1)) {
-    const mondayFirstWeekday = (parseLocalDate(date).getDay() + 6) % 7;
-    if (task.repeatType === "daily" || task.repeatDays?.includes(mondayFirstWeekday)) {
+    if (isRepeatDate(task, date)) {
       dates.push(date);
     }
   }
@@ -2230,8 +2230,9 @@ function getRepeatOccurrenceDates(task: Task, todayDate: string) {
 }
 
 function buildRepeatSeriesTasks(task: Task) {
-  if (task.repeatType === "none" || !task.endDate) return [task];
-  return [task.startDate, ...getRepeatOccurrenceDates(task, task.endDate)].map((date, index) => ({
+  if (task.repeatType === "none") return [task];
+  const dates = [...(isRepeatDate(task, task.startDate) ? [task.startDate] : []), ...getRepeatOccurrenceDates(task, getRepeatSeriesEndDate(task))];
+  return (dates.length > 0 ? dates : [task.startDate]).map((date, index) => ({
     ...task,
     id: index === 0 ? task.id : getRepeatInstanceId(task, date),
     startDate: date,
@@ -2241,6 +2242,18 @@ function buildRepeatSeriesTasks(task: Task) {
     endTime: undefined,
     createdAt: index === 0 ? task.createdAt : nowIso(),
   }));
+}
+
+function getRepeatSeriesEndDate(task: Task) {
+  return task.endDate ?? addLocalDays(task.startDate, defaultRepeatHorizonDays);
+}
+
+function isRepeatDate(task: Task, date: string) {
+  if (task.repeatType === "daily") return true;
+  if (task.repeatType !== "weekly") return false;
+  if (!task.repeatDays || task.repeatDays.length === 0) return date === task.startDate;
+  const mondayFirstWeekday = (parseLocalDate(date).getDay() + 6) % 7;
+  return task.repeatDays.includes(mondayFirstWeekday);
 }
 
 function getRepeatInstanceId(task: Task, date: string) {
