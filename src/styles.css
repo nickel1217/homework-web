@@ -172,6 +172,39 @@ button:disabled {
     @apply sm:items-start;
   }
 
+  .task-editor-target {
+    scroll-margin-top: 20px;
+    @apply rounded-[30px] transition-shadow duration-300;
+  }
+
+  .task-editor-active {
+    @apply ring-4 ring-blue-200 shadow-soft;
+  }
+
+  .task-edit-notice {
+    @apply mb-4 flex items-center gap-3 rounded-xl border-2 border-blue-200 bg-blue-50 p-3 text-blue-800;
+  }
+
+  .task-edit-notice > svg {
+    @apply shrink-0;
+  }
+
+  .task-edit-notice div {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .task-edit-notice strong {
+    @apply truncate font-black;
+  }
+
+  .task-edit-notice span {
+    @apply text-sm font-bold text-blue-600;
+  }
+
+  .task-edit-button {
+    @apply border-2 border-blue-200 bg-white shadow-sm hover:border-blue-300;
+  }
+
   .task-card > div:first-child {
     @apply min-w-0 flex-1;
   }

@@ -32,7 +32,7 @@ import {
   Tv,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -193,6 +193,8 @@ function App() {
   });
   const [taskDraft, setTaskDraft] = useState(emptyTask());
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const taskEditorRef = useRef<HTMLDivElement | null>(null);
+  const taskTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [currentDate, setCurrentDate] = useState(today());
   const [selectedTaskDate, setSelectedTaskDate] = useState(today());
   const [hideCompletedTasks, setHideCompletedTasks] = useState(false);
@@ -604,6 +606,7 @@ function App() {
   };
 
   const editTask = (task: Task) => {
+    setActiveTab("tasks");
     setEditingTaskId(task.id);
     setTaskDraft({
       category: task.category,
@@ -623,6 +626,10 @@ function App() {
       rewardPoints: task.rewardPoints,
       penaltyPoints: task.penaltyPoints,
       overduePoints: task.overduePoints,
+    });
+    window.requestAnimationFrame(() => {
+      taskEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => taskTitleInputRef.current?.focus(), 450);
     });
   };
 
@@ -1099,7 +1106,17 @@ function App() {
           {activeTab === "tasks" && (
             <div className="space-y-5">
               <Header title="学习计划" subtitle="少输入，多点击，任务完成马上得积分。" />
-              <Panel title={editingTaskId ? "设置作业" : "添加任务"}>
+              <div className={`task-editor-target ${editingTaskId ? "task-editor-active" : ""}`} ref={taskEditorRef}>
+              <Panel title={editingTaskId ? "修改作业" : "添加任务"}>
+                {editingTaskId && (
+                  <div className="task-edit-notice">
+                    <Pencil size={20} />
+                    <div>
+                      <strong>正在修改：{taskDraft.title}</strong>
+                      <span>调整完成后，请点击下方“保存设置”。</span>
+                    </div>
+                  </div>
+                )}
                 <div className="grid gap-3 lg:grid-cols-[140px_140px_1fr_120px_140px]">
                   <select className="input" value={taskDraft.category} onChange={(event) => setTaskDraft({ ...taskDraft, category: event.target.value })}>
                     {subjects.map((subject) => (
@@ -1111,7 +1128,7 @@ function App() {
                       <option key={type}>{type}</option>
                     ))}
                   </select>
-                  <input className="input" placeholder="例如：数学口算 20 题" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
+                  <input ref={taskTitleInputRef} className="input" placeholder="例如：数学口算 20 题" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
                   <NumberInput value={taskDraft.plannedMinutes ?? 0} suffix="分钟" onChange={(value) => setTaskDraft({ ...taskDraft, plannedMinutes: value })} />
                   <select
                     className="input"
@@ -1180,6 +1197,7 @@ function App() {
                   )}
                 </div>
               </Panel>
+              </div>
               <Panel title="OCR 识别作业">
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-3">
@@ -1328,8 +1346,8 @@ function App() {
                           </button>
                         </>
                       )}
-                      <button className="secondary-button" onClick={() => requestEditTask(task)}>
-                        设置
+                      <button className="secondary-button task-edit-button" onClick={() => requestEditTask(task)}>
+                        <Pencil size={18} /> 修改
                       </button>
                       <button className="icon-button" disabled={busyTaskId === task.id} onClick={() => requestDeleteTask(task)} aria-label="删除任务">
                         {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
