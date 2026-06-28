@@ -205,6 +205,14 @@ button:disabled {
     @apply border-2 border-blue-200 bg-white shadow-sm hover:border-blue-300;
   }
 
+  .task-delete-zone {
+    @apply ml-2 inline-flex border-l-2 border-slate-200 pl-3;
+  }
+
+  .task-delete-button {
+    @apply border-2 border-red-200 bg-red-50 text-red-600 shadow-sm hover:border-red-300 hover:bg-red-100;
+  }
+
   .task-card > div:first-child {
     @apply min-w-0 flex-1;
   }

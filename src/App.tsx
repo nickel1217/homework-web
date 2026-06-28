@@ -1349,9 +1349,11 @@ function App() {
                       <button className="secondary-button task-edit-button" onClick={() => requestEditTask(task)}>
                         <Pencil size={18} /> 修改
                       </button>
-                      <button className="icon-button" disabled={busyTaskId === task.id} onClick={() => requestDeleteTask(task)} aria-label="删除任务">
-                        {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
-                      </button>
+                      <span className="task-delete-zone">
+                        <button className="icon-button task-delete-button" disabled={busyTaskId === task.id} onClick={() => requestDeleteTask(task)} aria-label="删除任务" title="删除任务">
+                          {busyTaskId === task.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
+                        </button>
+                      </span>
                     </div>
                   </article>
                 ))}
