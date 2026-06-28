@@ -104,6 +104,15 @@ create table if not exists public.family_task_deletions (
   primary key (family_code, task_id)
 );
 
+create table if not exists public.family_task_daily_plans (
+  family_code text not null,
+  task_id text not null,
+  plan_date text not null,
+  planned_minutes integer not null,
+  created_at text not null,
+  primary key (family_code, task_id, plan_date)
+);
+
 alter table public.family_settings add column if not exists parent_password text not null default 'admin';
 alter table public.family_settings add column if not exists badge_start_date date;
 
@@ -112,6 +121,7 @@ create index if not exists family_exams_family_code_idx on public.family_exams (
 create index if not exists family_ledger_family_code_idx on public.family_ledger (family_code);
 create index if not exists family_subjects_family_code_idx on public.family_subjects (family_code);
 create index if not exists family_task_deletions_family_code_idx on public.family_task_deletions (family_code);
+create index if not exists family_task_daily_plans_family_code_idx on public.family_task_daily_plans (family_code);
 
 create or replace function public.skip_future_repeat_task_instances()
 returns trigger
@@ -149,6 +159,7 @@ alter table public.family_subjects enable row level security;
 alter table public.family_ledger enable row level security;
 alter table public.family_settings enable row level security;
 alter table public.family_task_deletions enable row level security;
+alter table public.family_task_daily_plans enable row level security;
 
 drop policy if exists "Anon can use family tasks" on public.family_tasks;
 create policy "Anon can use family tasks" on public.family_tasks for all using (true) with check (true);
@@ -173,5 +184,8 @@ create policy "Anon can use family settings" on public.family_settings for all u
 
 drop policy if exists "Anon can use family task deletions" on public.family_task_deletions;
 create policy "Anon can use family task deletions" on public.family_task_deletions for all using (true) with check (true);
+
+drop policy if exists "Anon can use family task daily plans" on public.family_task_daily_plans;
+create policy "Anon can use family task daily plans" on public.family_task_daily_plans for all using (true) with check (true);
 
 notify pgrst, 'reload schema';

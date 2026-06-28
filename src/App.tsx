@@ -60,6 +60,7 @@ import {
   deleteCloudLedger,
   deleteCloudReward,
   deleteCloudTask,
+  deleteCloudTaskDailyPlans,
   ensureCloudSeedData,
   fetchCloudData,
   fetchCloudTaskDeletionIds,
@@ -74,6 +75,7 @@ import {
   upsertCloudBadge,
   upsertCloudSubject,
   upsertCloudReward,
+  upsertCloudTaskDailyPlans,
 } from "./supabase";
 import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, Subject, Task } from "./types";
 
@@ -258,7 +260,9 @@ function App() {
       await ensureRepeatInstances(data.tasks);
       const withRepeats = await fetchCloudData(familyCode);
       const stalePausedTasks = await pauseStaleRunningTasks(withRepeats.tasks);
-      await refreshCloudBadges(familyCode, withRepeats.tasks, withRepeats.badges, withRepeats.exams, withRepeats.settings?.[0]?.badgeStartDate);
+      const afterPause = stalePausedTasks.length > 0 ? await fetchCloudData(familyCode) : withRepeats;
+      await ensureDailyTaskPlans(afterPause.tasks);
+      await refreshCloudBadges(familyCode, afterPause.tasks, afterPause.badges, afterPause.exams, afterPause.settings?.[0]?.badgeStartDate);
       const refreshed = await fetchCloudData(familyCode);
       const loadedDeletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
       const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友", badgeStartDate: today() };
@@ -329,9 +333,30 @@ function App() {
     return staleTasks;
   };
 
+  const ensureDailyTaskPlans = async (tasks: Task[]) => {
+    const planDate = today();
+    const plans = tasks
+      .filter(
+        (task) =>
+          isMultiDaySingleTask(task) &&
+          task.status !== "completed" &&
+          task.status !== "expired" &&
+          task.startDate <= planDate &&
+          planDate <= (task.endDate ?? task.startDate) &&
+          task.dailyPlans?.[planDate] === undefined,
+      )
+      .map((task) => ({
+        taskId: task.id,
+        planDate,
+        plannedMinutes: Math.max(0, (task.plannedMinutes ?? 0) - (task.actualMinutes ?? 0)),
+      }));
+    await Promise.all(plans.map((plan) => deleteCloudTaskDailyPlans(familyCode, plan.taskId)));
+    await upsertCloudTaskDailyPlans(familyCode, plans);
+  };
+
   useEffect(() => {
     void load();
-  }, [familyCode]);
+  }, [currentDate, familyCode]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentDate(today()), 60000);
@@ -467,8 +492,9 @@ function App() {
     if (editingTaskId && editingRepeatSeriesFrom && currentEditingTask) {
       const tasksToUpdate = getRepeatSeriesTasks(currentEditingTask, state.tasks, editingRepeatSeriesFrom);
       await Promise.all(
-        tasksToUpdate.map((item) =>
-          updateCloudTask(familyCode, item.id, toEditableTaskPatch(normalizeTaskPoints({
+        tasksToUpdate.map(async (item) => {
+          await deleteCloudTaskDailyPlans(familyCode, item.id);
+          return updateCloudTask(familyCode, item.id, toEditableTaskPatch(normalizeTaskPoints({
             ...item,
             category: task.category,
             assignmentType: task.assignmentType,
@@ -482,11 +508,13 @@ function App() {
             rewardPoints: task.rewardPoints,
             penaltyPoints: task.penaltyPoints,
             overduePoints: task.overduePoints,
-          }))),
-        ),
+          })));
+        }),
       );
-    } else if (editingTaskId) await updateCloudTask(familyCode, editingTaskId, toEditableTaskPatch(task));
-    else await addCloudTasks(familyCode, buildRepeatSeriesTasks(task));
+    } else if (editingTaskId) {
+      await deleteCloudTaskDailyPlans(familyCode, editingTaskId);
+      await updateCloudTask(familyCode, editingTaskId, toEditableTaskPatch(task));
+    } else await addCloudTasks(familyCode, buildRepeatSeriesTasks(task));
     setTaskDraft(editingTaskId ? emptyTask(currentDate) : getNextTaskDraft(taskDraft, currentDate));
     setEditingTaskId(null);
     setEditingRepeatSeriesFrom(null);
@@ -552,7 +580,12 @@ function App() {
         await Promise.all(deletionIds.map((deletionId) => addCloudTaskDeletion(familyCode, deletionId)));
         setDeletedTaskIds((current) => new Set([...current, ...deletionIds]));
       }
-      await Promise.all(tasksToDelete.map((item) => deleteCloudTask(familyCode, item.id)));
+      await Promise.all(
+        tasksToDelete.map(async (item) => {
+          await deleteCloudTaskDailyPlans(familyCode, item.id);
+          await deleteCloudTask(familyCode, item.id);
+        }),
+      );
       setState((current) => ({
         ...current,
         tasks: current.tasks.filter((item) => !tasksToDelete.some((deletedTask) => deletedTask.id === item.id)),
@@ -2135,8 +2168,9 @@ function getTaskPlannedMinutesForDate(task: Task, date: string) {
   const plannedMinutes = task.plannedMinutes ?? 0;
   if (!isMultiDaySingleTask(task)) return task.startDate === date ? plannedMinutes : 0;
   if (getTaskEffectivePlanDate(task) !== date) return 0;
+  if (task.dailyPlans?.[date] !== undefined) return task.dailyPlans[date];
   if (task.status === "completed") return plannedMinutes;
-  return Math.max(0, plannedMinutes - getTaskElapsedMinutes(task));
+  return Math.max(0, plannedMinutes - (task.actualMinutes ?? 0));
 }
 
 function getTaskTodoCountForDate(task: Task, date: string) {

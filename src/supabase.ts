@@ -61,6 +61,7 @@ type LedgerRow = {
 type SettingsRow = { id: string; family_code: string; child_name: string; parent_password?: string | null; badge_start_date?: string | null };
 type SubjectRow = { id: string; family_code: string; name: string; color: string; show_on_home: boolean; sort_order: number };
 type TaskDeletionRow = { family_code: string; task_id: string; created_at: string };
+type TaskDailyPlanRow = { family_code: string; task_id: string; plan_date: string; planned_minutes: number; created_at: string };
 type TaskPatch = Partial<Omit<Task, "endDate" | "startTime" | "endTime" | "repeatDays">> & {
   endDate?: string | null;
   startTime?: string | null;
@@ -78,7 +79,7 @@ const defaultSubjects: Array<Omit<SubjectRow, "family_code">> = [
 ];
 
 export async function fetchCloudData(familyCode: string): Promise<BackupData> {
-  const [tasks, exams, badges, rewards, ledger, settings, subjects] = await Promise.all([
+  const [tasks, exams, badges, rewards, ledger, settings, subjects, taskDailyPlans] = await Promise.all([
     selectRows<TaskRow>("family_tasks", familyCode, "created_at", false),
     selectRows<ExamRow>("family_exams", familyCode, "exam_date", false),
     selectRows<BadgeRow>("family_badges", familyCode),
@@ -86,10 +87,18 @@ export async function fetchCloudData(familyCode: string): Promise<BackupData> {
     selectRows<LedgerRow>("family_ledger", familyCode, "created_at", false),
     selectRows<SettingsRow>("family_settings", familyCode),
     selectRows<SubjectRow>("family_subjects", familyCode, "sort_order"),
+    selectRows<TaskDailyPlanRow>("family_task_daily_plans", familyCode, "plan_date"),
   ]);
 
+  const dailyPlansByTask = new Map<string, Record<string, number>>();
+  for (const plan of taskDailyPlans) {
+    const taskPlans = dailyPlansByTask.get(plan.task_id) ?? {};
+    taskPlans[plan.plan_date] = plan.planned_minutes;
+    dailyPlansByTask.set(plan.task_id, taskPlans);
+  }
+
   return {
-    tasks: tasks.map(fromTaskRow),
+    tasks: tasks.map((task) => fromTaskRow(task, dailyPlansByTask.get(task.id))),
     exams: exams.map(fromExamRow),
     badges: badges.map(fromBadgeRow),
     rewards: rewards.map(fromRewardRow),
@@ -169,6 +178,24 @@ export async function addCloudTask(familyCode: string, task: Task) {
 
 export async function addCloudTasks(familyCode: string, tasks: Task[]) {
   await upsertRows("family_tasks", tasks.map((task) => toTaskRow(familyCode, task)));
+}
+
+export async function upsertCloudTaskDailyPlans(familyCode: string, plans: Array<{ taskId: string; planDate: string; plannedMinutes: number }>) {
+  await upsertRows(
+    "family_task_daily_plans",
+    plans.map((plan) => ({
+      family_code: familyCode,
+      task_id: plan.taskId,
+      plan_date: plan.planDate,
+      planned_minutes: plan.plannedMinutes,
+      created_at: new Date().toISOString(),
+    })),
+  );
+}
+
+export async function deleteCloudTaskDailyPlans(familyCode: string, taskId: string) {
+  const { error } = await supabase.from("family_task_daily_plans").delete().eq("family_code", familyCode).eq("task_id", taskId);
+  if (error) throw error;
 }
 
 export async function updateCloudTask(familyCode: string, id: string, changes: TaskPatch) {
@@ -262,6 +289,7 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
       deleteFamilyRows("family_subjects", familyCode),
       deleteFamilyRows("family_ledger", familyCode),
       deleteFamilyRows("family_task_deletions", familyCode),
+      deleteFamilyRows("family_task_daily_plans", familyCode),
       deleteFamilyRows("family_settings", familyCode),
     ]);
   }
@@ -273,6 +301,18 @@ export async function restoreCloudBackup(familyCode: string, backup: BackupData,
     upsertRows("family_rewards", backup.rewards.map((reward) => toRewardRow(familyCode, reward))),
     upsertRows("family_subjects", (backup.subjects ?? []).map((subject) => toSubjectRow(familyCode, subject))),
     upsertRows("family_ledger", (backup.ledger ?? []).map((row) => toLedgerRow(familyCode, row))),
+    upsertRows(
+      "family_task_daily_plans",
+      backup.tasks.flatMap((task) =>
+        Object.entries(task.dailyPlans ?? {}).map(([planDate, plannedMinutes]) => ({
+          family_code: familyCode,
+          task_id: task.id,
+          plan_date: planDate,
+          planned_minutes: plannedMinutes,
+          created_at: new Date().toISOString(),
+        })),
+      ),
+    ),
     upsertRows("family_settings", backup.settings.map((setting) => ({ id: setting.id, family_code: familyCode, child_name: setting.childName, parent_password: setting.parentPassword ?? "admin", badge_start_date: setting.badgeStartDate }))),
   ]);
 }
@@ -334,7 +374,7 @@ async function deleteFamilyRows(table: string, familyCode: string) {
   if (error) throw error;
 }
 
-function fromTaskRow(row: TaskRow): Task {
+function fromTaskRow(row: TaskRow, dailyPlans?: Record<string, number>): Task {
   return {
     id: row.id,
     category: row.category,
@@ -343,6 +383,7 @@ function fromTaskRow(row: TaskRow): Task {
     description: row.description ?? undefined,
     plannedMinutes: row.planned_minutes ?? undefined,
     actualMinutes: row.actual_minutes ?? undefined,
+    dailyPlans,
     startTime: row.start_time || undefined,
     endTime: row.end_time || undefined,
     status: row.status,

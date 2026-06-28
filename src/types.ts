@@ -10,6 +10,7 @@ export type Task = {
   description?: string;
   plannedMinutes?: number;
   actualMinutes?: number;
+  dailyPlans?: Record<string, number>;
   startTime?: string;
   endTime?: string;
   status: TaskStatus;
