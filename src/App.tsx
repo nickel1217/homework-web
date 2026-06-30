@@ -480,6 +480,7 @@ function App() {
     }
     return [...map.entries()].map(([name, value]) => ({ name, value }));
   }, [state.tasks, statsDates, deletedTaskIds]);
+  const studyTimeline = useMemo(() => buildStudyTimeline(state.tasks, statsDates, deletedTaskIds), [state.tasks, statsDates, deletedTaskIds]);
   const filteredLedger = useMemo(() => filterLedger(state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo), [state.ledger, ledgerRange, ledgerDateFrom, ledgerDateTo]);
 
   const addTask = async () => {
@@ -1491,6 +1492,9 @@ function App() {
                   <Metric title="完成率" value={`${statsSummary.total ? Math.round((statsSummary.completed / statsSummary.total) * 100) : 0}`} suffix="%" tone="purple" />
                 </div>
               </Panel>
+              <Panel title="每日作业时间轴">
+                <StudyTimeline days={studyTimeline} subjects={subjects} />
+              </Panel>
               <div className="grid gap-5 xl:grid-cols-2">
                 <Panel title={timeComparisonTitle}>
                   <ChartBox>
@@ -2007,6 +2011,78 @@ function ChartBox({ children }: { children: React.ReactNode }) {
   return <div className="h-72 w-full">{children}</div>;
 }
 
+type StudyTimelineEntry = {
+  id: string;
+  title: string;
+  category: string;
+  startMinute: number;
+  endMinute: number;
+  startLabel: string;
+  endLabel: string;
+  estimated: boolean;
+  running: boolean;
+};
+
+type StudyTimelineDay = { date: string; entries: StudyTimelineEntry[] };
+
+function StudyTimeline({ days, subjects }: { days: StudyTimelineDay[]; subjects: Subject[] }) {
+  const entries = days.flatMap((day) => day.entries);
+  if (entries.length === 0) return <EmptyText text="这个范围内还没有可显示的计时记录。开始作业计时后，这里会出现具体时间段。" />;
+
+  const earliest = Math.min(...entries.map((entry) => entry.startMinute));
+  const latest = Math.max(...entries.map((entry) => entry.endMinute));
+  let rangeStart = Math.max(0, Math.floor(earliest / 60) * 60);
+  let rangeEnd = Math.min(1440, Math.ceil(latest / 60) * 60);
+  if (rangeEnd - rangeStart < 360) {
+    const padding = 360 - (rangeEnd - rangeStart);
+    rangeStart = Math.max(0, rangeStart - Math.floor(padding / 2));
+    rangeEnd = Math.min(1440, rangeStart + 360);
+    rangeStart = Math.max(0, rangeEnd - 360);
+  }
+  const ticks = Array.from({ length: 5 }, (_, index) => rangeStart + ((rangeEnd - rangeStart) * index) / 4);
+
+  return (
+    <div>
+      <div className="timeline-note">
+        <Clock size={18} /> 色块表示实际计时区间；虚线色块为根据实际耗时回推的旧记录。
+      </div>
+      <div className="timeline-scroll">
+        <div className="study-timeline">
+          <div className="timeline-axis-label" />
+          <div className="timeline-axis">
+            {ticks.map((minute) => <span key={minute} style={{ left: `${((minute - rangeStart) / (rangeEnd - rangeStart)) * 100}%` }}>{formatClockMinute(minute)}</span>)}
+          </div>
+          {days.map((day) => (
+            <div className="timeline-row" key={day.date}>
+              <div className="timeline-day-label">
+                <strong>{day.date.slice(5)}</strong>
+                <span>{getChineseWeekday(day.date)}</span>
+              </div>
+              <div className="timeline-track" style={{ height: `${Math.max(44, day.entries.length * 36 + 8)}px` }}>
+                {ticks.map((minute) => <i className="timeline-gridline" key={minute} style={{ left: `${((minute - rangeStart) / (rangeEnd - rangeStart)) * 100}%` }} />)}
+                {day.entries.map((entry, index) => {
+                  const left = ((Math.max(entry.startMinute, rangeStart) - rangeStart) / (rangeEnd - rangeStart)) * 100;
+                  const width = Math.max(1.5, ((Math.min(entry.endMinute, rangeEnd) - Math.max(entry.startMinute, rangeStart)) / (rangeEnd - rangeStart)) * 100);
+                  return (
+                    <div
+                      className={`timeline-block ${entry.estimated ? "timeline-block-estimated" : ""} ${entry.running ? "timeline-block-running" : ""}`}
+                      key={entry.id}
+                      style={{ left: `${left}%`, width: `${width}%`, top: `${index * 36 + 6}px`, backgroundColor: getSubjectColor(subjects, entry.category) ?? "#6366f1" }}
+                      title={`${entry.title} · ${entry.startLabel}–${entry.endLabel}${entry.estimated ? "（回推）" : ""}`}
+                    >
+                      <span>{entry.title}</span><small>{entry.startLabel}–{entry.endLabel}</small>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EmptyText({ text }: { text: string }) {
   return <p className="rounded-2xl bg-slate-50 p-4 text-slate-500">{text}</p>;
 }
@@ -2392,6 +2468,72 @@ function addLocalDays(dateText: string, days: number) {
   const date = parseLocalDate(dateText);
   date.setDate(date.getDate() + days);
   return toLocalDateInputValue(date);
+}
+
+function buildStudyTimeline(tasks: Task[], dates: string[], deletedTaskIds: Set<string>): StudyTimelineDay[] {
+  const dateSet = new Set(dates);
+  const map = new Map(dates.map((date) => [date, [] as StudyTimelineEntry[]]));
+
+  for (const task of tasks) {
+    let start: Date | undefined;
+    let end: Date | undefined;
+    let estimated = false;
+    let running = false;
+
+    if (task.status === "running" && task.startTime) {
+      start = new Date(task.startTime);
+      end = new Date();
+      running = true;
+    } else if (task.status === "completed" && task.endTime) {
+      end = new Date(task.endTime);
+      if (task.startTime) start = new Date(task.startTime);
+      const recordedMinutes = Math.max(1, task.actualMinutes ?? 0);
+      const intervalMinutes = start && !Number.isNaN(start.getTime()) ? Math.floor((end.getTime() - start.getTime()) / 60000) : 0;
+      if (!start || Number.isNaN(start.getTime()) || start > end || recordedMinutes > intervalMinutes + 1) {
+        start = new Date(end.getTime() - recordedMinutes * 60000);
+        estimated = true;
+      }
+    }
+
+    if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) continue;
+
+    for (let date = toLocalDateInputValue(start); date <= toLocalDateInputValue(end); date = addLocalDays(date, 1)) {
+      if (!dateSet.has(date) || isRepeatOccurrenceDeletedOnDate(task, date, deletedTaskIds)) continue;
+      const dayStart = parseLocalDate(date);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const segmentStart = new Date(Math.max(start.getTime(), dayStart.getTime()));
+      const segmentEnd = new Date(Math.min(end.getTime(), dayEnd.getTime()));
+      if (segmentEnd <= segmentStart) continue;
+      const startMinute = segmentStart.getHours() * 60 + segmentStart.getMinutes();
+      const isMidnightEnd = segmentEnd.getTime() === dayEnd.getTime();
+      const endMinute = isMidnightEnd ? 1440 : segmentEnd.getHours() * 60 + segmentEnd.getMinutes();
+      map.get(date)?.push({
+        id: `${task.id}-${date}`,
+        title: task.title,
+        category: task.category,
+        startMinute,
+        endMinute: Math.max(startMinute + 1, endMinute),
+        startLabel: formatClockMinute(startMinute),
+        endLabel: formatClockMinute(endMinute),
+        estimated,
+        running,
+      });
+    }
+  }
+
+  return dates.map((date) => ({ date, entries: (map.get(date) ?? []).sort((left, right) => left.startMinute - right.startMinute) }));
+}
+
+function formatClockMinute(minute: number) {
+  if (minute >= 1440) return "24:00";
+  const hour = Math.floor(minute / 60);
+  const minutes = Math.floor(minute % 60);
+  return `${`${hour}`.padStart(2, "0")}:${`${minutes}`.padStart(2, "0")}`;
+}
+
+function getChineseWeekday(dateText: string) {
+  return `周${["日", "一", "二", "三", "四", "五", "六"][parseLocalDate(dateText).getDay()]}`;
 }
 
 function getStatsWindow(dateText: string, range: "day" | "week" | "month") {

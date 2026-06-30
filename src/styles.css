@@ -115,6 +115,77 @@ button:disabled {
     @apply grid gap-2 sm:grid-cols-3;
   }
 
+  .timeline-note {
+    @apply mb-4 flex items-center gap-2 rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700;
+  }
+
+  .timeline-scroll {
+    @apply overflow-x-auto pb-2;
+  }
+
+  .study-timeline {
+    @apply grid min-w-[660px] gap-y-2;
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+
+  .timeline-axis {
+    @apply relative mb-1 h-6 border-b-2 border-slate-200 text-xs font-black text-slate-400;
+  }
+
+  .timeline-axis span {
+    @apply absolute top-0 -translate-x-1/2 whitespace-nowrap;
+  }
+
+  .timeline-row {
+    @apply contents;
+  }
+
+  .timeline-day-label {
+    @apply flex flex-col justify-center rounded-l-2xl bg-slate-50 px-3;
+  }
+
+  .timeline-day-label strong {
+    @apply font-black text-slate-700;
+  }
+
+  .timeline-day-label span {
+    @apply text-xs font-bold text-slate-400;
+  }
+
+  .timeline-track {
+    @apply relative overflow-hidden rounded-r-2xl bg-slate-50;
+  }
+
+  .timeline-gridline {
+    @apply pointer-events-none absolute inset-y-0 border-l border-dashed border-slate-200;
+  }
+
+  .timeline-block {
+    @apply absolute z-10 flex h-8 min-w-5 items-center gap-2 overflow-hidden rounded-lg px-2 text-white shadow-sm;
+  }
+
+  .timeline-block span {
+    @apply min-w-0 truncate text-xs font-black;
+  }
+
+  .timeline-block small {
+    @apply ml-auto shrink-0 text-[10px] font-bold opacity-90;
+  }
+
+  .timeline-block-estimated {
+    @apply border-2 border-dashed border-white/90 opacity-75;
+  }
+
+  .timeline-block-running {
+    @apply animate-pulse ring-2 ring-yellow-300 ring-offset-1;
+  }
+
+  @media (max-width: 760px) {
+    .study-timeline {
+      grid-template-columns: 72px minmax(560px, 1fr);
+    }
+  }
+
   .reward-toggle {
     @apply inline-flex min-h-11 items-center gap-2 rounded-lg border-2 border-slate-100 bg-white px-3 font-black text-slate-700 shadow-sm transition;
   }
