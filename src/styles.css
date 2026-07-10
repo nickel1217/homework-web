@@ -588,6 +588,28 @@ body {
   border-color: var(--theme-soft-strong);
 }
 
+.task-editor-active {
+  --tw-ring-color: var(--theme-soft-strong);
+}
+
+.task-edit-notice {
+  border-color: var(--theme-soft-strong);
+  background-color: var(--theme-soft);
+  color: var(--theme-ink);
+}
+
+.task-edit-notice span {
+  color: var(--theme-primary);
+}
+
+.task-edit-button {
+  border-color: var(--theme-soft-strong);
+}
+
+.task-edit-button:hover {
+  border-color: var(--theme-primary);
+}
+
 .theme-picker {
   display: flex;
   flex-wrap: wrap;

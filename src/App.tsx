@@ -462,10 +462,11 @@ function App() {
   );
   const weekDays = getWeekDays(selectedTaskDate);
 
-  const scoreTrend = useMemo(() => buildScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
-  const scoreTrendDomain = useMemo(() => getScoreTrendDomain(scoreTrend), [scoreTrend]);
-  const latestScorePoint = scoreTrend[scoreTrend.length - 1];
-  const previousSameSubjectScore = latestScorePoint ? [...scoreTrend.slice(0, -1)].reverse().find((point) => point.subject === latestScorePoint.subject) : undefined;
+  const scoreTrendPoints = useMemo(() => buildScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
+  const scoreTrendRows = useMemo(() => buildSubjectScoreTrendRows(scoreTrendPoints), [scoreTrendPoints]);
+  const scoreTrendDomain = useMemo(() => getScoreTrendDomain(scoreTrendPoints), [scoreTrendPoints]);
+  const latestScorePoint = scoreTrendPoints[scoreTrendPoints.length - 1];
+  const previousSameSubjectScore = latestScorePoint ? [...scoreTrendPoints.slice(0, -1)].reverse().find((point) => point.subject === latestScorePoint.subject) : undefined;
   const scoreTrendDelta = latestScorePoint && previousSameSubjectScore ? latestScorePoint.score - previousSameSubjectScore.score : null;
   const badgeStats = useMemo(
     () => getBadgeStats(state.tasks, state.exams, state.ledger, state.settings?.badgeStartDate),
@@ -1137,38 +1138,47 @@ function App() {
               </div>
               <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
                 <Panel title="最近成绩趋势">
-                  {scoreTrend.length > 0 ? (
+                  {scoreTrendPoints.length > 0 ? (
                     <>
                       <div className="score-trend-summary">
                         <div>
                           <span>最近一次</span>
-                          <strong>{scoreTrend[scoreTrend.length - 1].score}<small>分</small></strong>
-                          <em>{scoreTrend[scoreTrend.length - 1].subject} · {scoreTrend[scoreTrend.length - 1].examName}</em>
+                          <strong>{latestScorePoint.score}<small>分</small></strong>
+                          <em>{latestScorePoint.subject} · {latestScorePoint.examName}</em>
                         </div>
                         <div className={`score-trend-delta ${scoreTrendDelta !== null && scoreTrendDelta > 0 ? "score-trend-up" : scoreTrendDelta !== null && scoreTrendDelta < 0 ? "score-trend-down" : ""}`}>
-                          {scoreTrendDelta === null ? `${scoreTrend[scoreTrend.length - 1].subject}的第一条趋势` : scoreTrendDelta === 0 ? "与同科上次持平" : `比同科上次 ${scoreTrendDelta > 0 ? "+" : ""}${scoreTrendDelta} 分`}
+                          {scoreTrendDelta === null ? `${latestScorePoint.subject}的第一条趋势` : scoreTrendDelta === 0 ? "与同科上次持平" : `比同科上次 ${scoreTrendDelta > 0 ? "+" : ""}${scoreTrendDelta} 分`}
                         </div>
                       </div>
                       <ChartBox className="score-trend-chart">
                         <ResponsiveContainer minWidth={0} initialDimension={{ width: 800, height: 240 }}>
-                          <LineChart data={scoreTrend} margin={{ top: 18, right: 18, bottom: 4, left: -12 }}>
+                          <LineChart data={scoreTrendRows} margin={{ top: 18, right: 18, bottom: 4, left: 8 }}>
                             <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#dbe3f0" />
-                            <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                            <YAxis domain={scoreTrendDomain} ticks={getScoreTrendTicks(scoreTrendDomain)} tickLine={false} axisLine={false} width={38} />
-                            <ReferenceLine y={80} stroke="#94a3b8" strokeDasharray="5 5" label={{ value: "80 分", position: "insideTopRight", fill: "#64748b" }} />
+                            <XAxis dataKey="label" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={44} tickMargin={8} />
+                            <YAxis domain={scoreTrendDomain} ticks={getScoreTrendTicks(scoreTrendDomain)} tickLine={false} axisLine={false} width={46} tickMargin={6} />
+                            <ReferenceLine y={80} stroke="#94a3b8" strokeDasharray="5 5" />
                             <Tooltip
-                              formatter={(value) => [`${value} 分`, "换算成绩"]}
-                              labelFormatter={(_, payload) => {
-                                const item = payload[0]?.payload as ScoreTrendPoint | undefined;
-                                return item ? `${item.date} · ${item.subject} · ${item.examName}` : "成绩";
-                              }}
+                              formatter={(value, name) => [`${value} 分`, name]}
+                              labelFormatter={(label) => `${label}`}
                             />
-                            <Line dataKey="score" name="成绩" stroke="var(--theme-primary)" strokeWidth={4} type="monotone" dot={<ScoreTrendDot />} activeDot={{ r: 7 }} />
+                            {visibleSubjects.filter((subject) => scoreTrendPoints.some((point) => point.subject === subject.name)).map((subject) => (
+                              <Line
+                                key={subject.id}
+                                dataKey={subject.name}
+                                name={subject.name}
+                                stroke={subject.color}
+                                strokeWidth={4}
+                                type="monotone"
+                                connectNulls
+                                dot={{ r: 5, fill: "white", stroke: subject.color, strokeWidth: 3 }}
+                                activeDot={{ r: 7, fill: "white", stroke: subject.color, strokeWidth: 4 }}
+                              />
+                            ))}
                           </LineChart>
                         </ResponsiveContainer>
                       </ChartBox>
                       <div className="score-subject-legend" aria-label="成绩科目颜色">
-                        {visibleSubjects.filter((subject) => scoreTrend.some((item) => item.subject === subject.name)).map((subject) => (
+                        {visibleSubjects.filter((subject) => scoreTrendPoints.some((item) => item.subject === subject.name)).map((subject) => (
                           <span key={subject.id}><i style={{ backgroundColor: subject.color }} />{subject.name}</span>
                         ))}
                       </div>
@@ -2195,15 +2205,7 @@ type ScoreTrendPoint = {
   color: string;
 };
 
-function ScoreTrendDot({ cx = 0, cy = 0, payload }: { cx?: number; cy?: number; payload?: ScoreTrendPoint }) {
-  if (!payload) return <g />;
-  return (
-    <g>
-      <circle cx={cx} cy={cy} r={7} fill="white" stroke={payload.color} strokeWidth={4} />
-      <title>{`${payload.subject} ${payload.examName}：${payload.score} 分`}</title>
-    </g>
-  );
-}
+type ScoreTrendRow = { date: string; label: string } & Record<string, string | number>;
 
 type StudyTimelineEntry = {
   id: string;
@@ -2831,12 +2833,28 @@ function buildScoreTrend(exams: ExamRecord[], subjects: Subject[]): ScoreTrendPo
     .map((exam) => ({
       id: exam.id,
       date: exam.examDate,
-      label: `${exam.examDate.slice(5)}·${exam.subject.slice(0, 1)}`,
+      label: exam.examDate.slice(5),
       subject: exam.subject,
       examName: exam.examName,
       score: formatPercent(exam.score, exam.totalScore),
       color: subjectColors.get(exam.subject) ?? "#2563eb",
     }));
+}
+
+function buildSubjectScoreTrendRows(points: ScoreTrendPoint[]): ScoreTrendRow[] {
+  const rows = new Map<string, ScoreTrendRow>();
+  const counts = new Map<string, Record<string, number>>();
+  for (const point of points) {
+    const row = rows.get(point.date) ?? { date: point.date, label: point.label };
+    const subjectCounts = counts.get(point.date) ?? {};
+    const count = subjectCounts[point.subject] ?? 0;
+    const current = typeof row[point.subject] === "number" ? row[point.subject] as number : 0;
+    row[point.subject] = Math.round((current * count + point.score) / (count + 1));
+    subjectCounts[point.subject] = count + 1;
+    rows.set(point.date, row);
+    counts.set(point.date, subjectCounts);
+  }
+  return [...rows.values()].sort((left, right) => left.date.localeCompare(right.date));
 }
 
 function getScoreTrendDomain(points: ScoreTrendPoint[]): [number, number] {
