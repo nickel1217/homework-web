@@ -5,6 +5,7 @@ import {
   CalendarCheck,
   CheckCircle2,
   Clock,
+  CloudSun,
   Cookie,
   Download,
   Gift,
@@ -12,6 +13,7 @@ import {
   Gamepad2,
   Home,
   IceCreamBowl,
+  Leaf,
   Loader2,
   Medal,
   Music,
@@ -20,10 +22,12 @@ import {
   Plus,
   Popcorn,
   RotateCcw,
+  Rocket,
   Save,
   Settings,
   Sparkles,
   Star,
+  Sun,
   Target,
   Ticket,
   Timer,
@@ -34,15 +38,16 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -65,6 +70,8 @@ import {
   fetchCloudData,
   fetchCloudTaskDeletionIds,
   getPointBalance,
+  getBadgeRewardPoints,
+  getBadgeStats,
   refreshCloudBadges,
   restoreCloudBackup,
   updateCloudSettings,
@@ -82,6 +89,7 @@ import type { AppSettings, BackupData, Badge, ExamRecord, PointLedger, Reward, S
 type Tab = "dashboard" | "tasks" | "exams" | "stats" | "badges" | "rewards" | "subjects" | "settings";
 type TaskSort = "default" | "time" | "subject" | "type" | "status";
 type LedgerRange = "7d" | "30d" | "all" | "custom";
+type ThemeId = "cloud" | "candy" | "forest" | "space" | "sunshine";
 type TaskStartConflict = { runningTask: Task; nextTask: Task };
 type RepeatTaskAction = { action: "edit" | "delete"; task: Task };
 type OcrDraftItem = OcrDraftTask & { draftId: string };
@@ -140,9 +148,28 @@ const badgeConditionOptions = [
   { value: "studyMinutes", label: "累计学习分钟" },
   { value: "completedDays", label: "有完成记录的天数" },
   { value: "perfectDays", label: "当天作业全部完成" },
+  { value: "consecutiveDays", label: "最长连续学习天数" },
   { value: "examsAbove90", label: "90 分以上考试次数" },
   { value: "examsAbove95", label: "95 分以上考试次数" },
+  { value: "pointsEarned", label: "累计获得积分" },
+  { value: "currentPoints", label: "当前积分达到" },
+  { value: "rewardsRedeemed", label: "兑换奖励次数" },
 ] as const;
+const badgeTemplates: Array<Omit<Badge, "id" | "unlocked">> = [
+  { name: "今日小勇士", description: "第一次把当天作业全部完成", icon: "Star", conditionType: "perfectDays", conditionValue: 1 },
+  { name: "连续打卡王", description: "连续 7 天都有学习完成记录", icon: "CalendarCheck", conditionType: "consecutiveDays", conditionValue: 7 },
+  { name: "专注小达人", description: "累计专注学习 300 分钟", icon: "Clock", conditionType: "studyMinutes", conditionValue: 300 },
+  { name: "进步之星", description: "获得 3 次 90 分以上成绩", icon: "Trophy", conditionType: "examsAbove90", conditionValue: 3 },
+  { name: "积分收藏家", description: "累计获得 100 积分", icon: "Target", conditionType: "pointsEarned", conditionValue: 100 },
+  { name: "愿望实现家", description: "用积分兑换 3 次喜欢的奖励", icon: "Medal", conditionType: "rewardsRedeemed", conditionValue: 3 },
+];
+const themeOptions: Array<{ id: ThemeId; name: string; description: string; icon: React.ElementType; colors: [string, string] }> = [
+  { id: "cloud", name: "云朵蓝", description: "清爽安静，适合每天使用", icon: CloudSun, colors: ["#2563eb", "#dbeafe"] },
+  { id: "candy", name: "草莓糖", description: "粉红糖果和圆点泡泡", icon: Sparkles, colors: ["#db2777", "#fce7f3"] },
+  { id: "forest", name: "森林探险", description: "嫩绿叶子和自然活力", icon: Leaf, colors: ["#15803d", "#dcfce7"] },
+  { id: "space", name: "星际旅行", description: "紫色星光和宇航梦想", icon: Rocket, colors: ["#7c3aed", "#ede9fe"] },
+  { id: "sunshine", name: "阳光乐园", description: "明亮橙黄，元气满满", icon: Sun, colors: ["#ea580c", "#ffedd5"] },
+];
 const fallbackSubjects: Subject[] = [
   { id: "chinese", name: "语文", color: "#ef4444", showOnHome: true, sortOrder: 1 },
   { id: "math", name: "数学", color: "#2563eb", showOnHome: true, sortOrder: 2 },
@@ -157,6 +184,7 @@ const nowIso = () => new Date().toISOString();
 const familyCodeKey = "homework-web-family-code";
 const ocrSettingsKey = "homework-web-local-ocr";
 const userRoleKey = "homework-web-user-role";
+const themeKey = "homework-web-theme";
 
 function emptyTask(startDate = today()): Omit<Task, "id" | "createdAt"> {
   return {
@@ -177,6 +205,7 @@ function emptyTask(startDate = today()): Omit<Task, "id" | "createdAt"> {
 }
 
 function App() {
+  const [theme, setTheme] = useState<ThemeId>(() => normalizeTheme(localStorage.getItem(themeKey)));
   const [familyCode, setFamilyCode] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
   const [familyCodeDraft, setFamilyCodeDraft] = useState(() => localStorage.getItem(familyCodeKey) ?? DEFAULT_FAMILY_CODE);
   const [userRole, setUserRole] = useState<"student" | "parent" | null>(() => (localStorage.getItem(userRoleKey) as "student" | "parent" | null) ?? null);
@@ -216,6 +245,7 @@ function App() {
     examDate: today(),
   });
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [examError, setExamError] = useState("");
   const [examSubjectFilter, setExamSubjectFilter] = useState("全部学科");
   const [examTypeFilter, setExamTypeFilter] = useState("全部类别");
   const [examGradeFilter, setExamGradeFilter] = useState("全部年级");
@@ -264,7 +294,7 @@ function App() {
       const stalePausedTasks = await pauseStaleRunningTasks(withRepeats.tasks);
       const afterPause = stalePausedTasks.length > 0 ? await fetchCloudData(familyCode) : withRepeats;
       await ensureDailyTaskPlans(afterPause.tasks);
-      await refreshCloudBadges(familyCode, afterPause.tasks, afterPause.badges, afterPause.exams, afterPause.settings?.[0]?.badgeStartDate);
+      await refreshCloudBadges(familyCode, afterPause.tasks, afterPause.badges, afterPause.exams, afterPause.ledger ?? [], afterPause.settings?.[0]?.badgeStartDate);
       const refreshed = await fetchCloudData(familyCode);
       const loadedDeletedTaskIds = await fetchCloudTaskDeletionIds(familyCode);
       const settings = refreshed.settings[0] ?? { id: "default", childName: "小朋友", badgeStartDate: today() };
@@ -366,6 +396,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(themeKey, theme);
+  }, [theme]);
+
+  useEffect(() => {
     if (editingTaskId || taskDraft.title.trim() || taskDraft.description?.trim() || taskDraft.startDate >= currentDate) return;
     setTaskDraft({
       ...taskDraft,
@@ -427,7 +462,15 @@ function App() {
   );
   const weekDays = getWeekDays(selectedTaskDate);
 
-  const scoreTrend = useMemo(() => buildSubjectScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
+  const scoreTrend = useMemo(() => buildScoreTrend(state.exams, visibleSubjects), [state.exams, visibleSubjects]);
+  const scoreTrendDomain = useMemo(() => getScoreTrendDomain(scoreTrend), [scoreTrend]);
+  const latestScorePoint = scoreTrend[scoreTrend.length - 1];
+  const previousSameSubjectScore = latestScorePoint ? [...scoreTrend.slice(0, -1)].reverse().find((point) => point.subject === latestScorePoint.subject) : undefined;
+  const scoreTrendDelta = latestScorePoint && previousSameSubjectScore ? latestScorePoint.score - previousSameSubjectScore.score : null;
+  const badgeStats = useMemo(
+    () => getBadgeStats(state.tasks, state.exams, state.ledger, state.settings?.badgeStartDate),
+    [state.tasks, state.exams, state.ledger, state.settings?.badgeStartDate],
+  );
 
   const statsWindow = useMemo(() => getStatsWindow(statsDate, statsRange), [statsDate, statsRange]);
   const statsDates = useMemo(() => getDateRange(statsWindow.start, statsWindow.end), [statsWindow]);
@@ -735,8 +778,31 @@ function App() {
   };
 
   const addExam = async () => {
-    if (!examDraft.examName.trim()) return;
-    const exam = { ...examDraft, id: editingExamId ?? crypto.randomUUID(), examName: examDraft.examName.trim(), rewardPoints: 0 };
+    if (!examDraft.examName.trim()) {
+      setExamError("请填写考试名称。");
+      return;
+    }
+    if (!Number.isFinite(examDraft.totalScore) || examDraft.totalScore <= 0) {
+      setExamError("满分必须大于 0。");
+      return;
+    }
+    if (!Number.isFinite(examDraft.score) || examDraft.score < 0 || examDraft.score > examDraft.totalScore) {
+      setExamError("得分应在 0 到满分之间。");
+      return;
+    }
+    if (!Number.isFinite(examDraft.averageScore) || examDraft.averageScore < 0 || examDraft.averageScore > examDraft.totalScore) {
+      setExamError("平均分应在 0 到满分之间；没有数据时可填写 0。");
+      return;
+    }
+    setExamError("");
+    const exam = {
+      ...examDraft,
+      id: editingExamId ?? crypto.randomUUID(),
+      examName: examDraft.examName.trim(),
+      averageScore: examDraft.averageScore > 0 ? examDraft.averageScore : undefined,
+      classRank: examDraft.classRank > 0 ? examDraft.classRank : undefined,
+      rewardPoints: 0,
+    };
     if (editingExamId) await updateCloudExam(familyCode, exam);
     else await addCloudExam(familyCode, exam);
     setExamDraft({ ...examDraft, examName: "" });
@@ -745,6 +811,7 @@ function App() {
   };
 
   const editExam = (exam: ExamRecord) => {
+    setExamError("");
     setEditingExamId(exam.id);
     setExamDraft({
       subject: exam.subject,
@@ -992,8 +1059,8 @@ function App() {
 
   if (!userRole) {
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f6f8ff] p-4 text-slate-900">
-        <section className="w-full max-w-xl rounded-[30px] bg-white p-6 shadow-soft">
+      <main className="app-shell grid min-h-screen place-items-center p-4 text-slate-900" data-theme={theme}>
+        <section className="app-surface w-full max-w-xl rounded-[30px] p-6 shadow-soft">
           <h1 className="text-3xl font-black">成长星球</h1>
           <p className="mt-2 text-slate-600">请选择登录身份。学生可直接进入，家长用密码验证后管理科目和设置。</p>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -1008,17 +1075,20 @@ function App() {
             </div>
           </div>
           {cloudStatus && <p className="mt-4 rounded-2xl bg-slate-50 p-4 font-bold text-slate-600">{cloudStatus}</p>}
+          <div className="mt-5 border-t-2 border-slate-100 pt-4">
+            <ThemePicker value={theme} onChange={setTheme} />
+          </div>
         </section>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f8ff] text-slate-900">
+    <main className="app-shell min-h-screen text-slate-900" data-theme={theme}>
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-4 xl:flex-row xl:px-6">
-        <aside className="rounded-[28px] bg-white p-3 shadow-soft xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)] xl:w-56">
+        <aside className="app-sidebar rounded-[28px] p-3 shadow-soft xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)] xl:w-56">
           <div className="mb-4 flex items-center gap-3 px-3 py-2">
-            <div className="grid size-12 place-items-center rounded-2xl bg-blue-600 text-white">
+            <div className="theme-logo grid size-12 place-items-center rounded-2xl text-white">
               <Sparkles />
             </div>
             <div>
@@ -1047,7 +1117,10 @@ function App() {
               );
             })}
           </nav>
-          <button className="mt-3 w-full rounded-2xl bg-slate-50 px-3 py-2 text-sm font-black text-slate-600" onClick={switchRole}>
+          <div className="mt-3 border-t-2 border-slate-100 pt-3">
+            <ThemePicker compact value={theme} onChange={setTheme} />
+          </div>
+          <button className="theme-secondary-surface mt-3 w-full rounded-2xl px-3 py-2 text-sm font-black text-slate-600" onClick={switchRole}>
             {userRole === "parent" ? "家长" : "学生"} · 切换身份
           </button>
         </aside>
@@ -1064,27 +1137,43 @@ function App() {
               </div>
               <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
                 <Panel title="最近成绩趋势">
-                  <ChartBox>
-                    <ResponsiveContainer>
-                      <AreaChart data={scoreTrend}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis domain={[0, 100]} />
-                        <Tooltip />
-                        <Legend />
-                        {visibleSubjects.map((subject) => (
-                          <Area
-                            dataKey={subject.name}
-                            fill={subject.color}
-                            fillOpacity={0.12}
-                            key={subject.id}
-                            stroke={subject.color}
-                            type="monotone"
-                          />
+                  {scoreTrend.length > 0 ? (
+                    <>
+                      <div className="score-trend-summary">
+                        <div>
+                          <span>最近一次</span>
+                          <strong>{scoreTrend[scoreTrend.length - 1].score}<small>分</small></strong>
+                          <em>{scoreTrend[scoreTrend.length - 1].subject} · {scoreTrend[scoreTrend.length - 1].examName}</em>
+                        </div>
+                        <div className={`score-trend-delta ${scoreTrendDelta !== null && scoreTrendDelta > 0 ? "score-trend-up" : scoreTrendDelta !== null && scoreTrendDelta < 0 ? "score-trend-down" : ""}`}>
+                          {scoreTrendDelta === null ? `${scoreTrend[scoreTrend.length - 1].subject}的第一条趋势` : scoreTrendDelta === 0 ? "与同科上次持平" : `比同科上次 ${scoreTrendDelta > 0 ? "+" : ""}${scoreTrendDelta} 分`}
+                        </div>
+                      </div>
+                      <ChartBox className="score-trend-chart">
+                        <ResponsiveContainer minWidth={0} initialDimension={{ width: 800, height: 240 }}>
+                          <LineChart data={scoreTrend} margin={{ top: 18, right: 18, bottom: 4, left: -12 }}>
+                            <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#dbe3f0" />
+                            <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                            <YAxis domain={scoreTrendDomain} ticks={getScoreTrendTicks(scoreTrendDomain)} tickLine={false} axisLine={false} width={38} />
+                            <ReferenceLine y={80} stroke="#94a3b8" strokeDasharray="5 5" label={{ value: "80 分", position: "insideTopRight", fill: "#64748b" }} />
+                            <Tooltip
+                              formatter={(value) => [`${value} 分`, "换算成绩"]}
+                              labelFormatter={(_, payload) => {
+                                const item = payload[0]?.payload as ScoreTrendPoint | undefined;
+                                return item ? `${item.date} · ${item.subject} · ${item.examName}` : "成绩";
+                              }}
+                            />
+                            <Line dataKey="score" name="成绩" stroke="var(--theme-primary)" strokeWidth={4} type="monotone" dot={<ScoreTrendDot />} activeDot={{ r: 7 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </ChartBox>
+                      <div className="score-subject-legend" aria-label="成绩科目颜色">
+                        {visibleSubjects.filter((subject) => scoreTrend.some((item) => item.subject === subject.name)).map((subject) => (
+                          <span key={subject.id}><i style={{ backgroundColor: subject.color }} />{subject.name}</span>
                         ))}
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </ChartBox>
+                      </div>
+                    </>
+                  ) : <EmptyText text="还没有可显示的成绩，记录第一场考试后就能看到趋势。" />}
                 </Panel>
                 <Panel title="最近勋章">
                   <div className="grid gap-3">
@@ -1391,14 +1480,16 @@ function App() {
                   <input className="input" placeholder="考试名称" value={examDraft.examName} onChange={(event) => setExamDraft({ ...examDraft, examName: event.target.value })} />
                 </div>
                 <div className="exam-form-details">
-                  <NumberInput className="exam-field-small" value={examDraft.score} onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
-                  <NumberInput className="exam-field-small" value={examDraft.totalScore} onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
+                  <NumberInput className="exam-field-small" value={examDraft.score} suffix="得分" onChange={(value) => setExamDraft({ ...examDraft, score: value })} />
+                  <NumberInput className="exam-field-small" value={examDraft.totalScore} suffix="满分" onChange={(value) => setExamDraft({ ...examDraft, totalScore: value })} />
+                  <NumberInput className="exam-field-medium" value={examDraft.averageScore} suffix="平均分" onChange={(value) => setExamDraft({ ...examDraft, averageScore: value })} />
                   <NumberInput className="exam-field-medium" value={examDraft.classRank} suffix="班级名次" onChange={(value) => setExamDraft({ ...examDraft, classRank: value })} />
                   <input className="input exam-date-input" type="date" value={examDraft.examDate} onChange={(event) => setExamDraft({ ...examDraft, examDate: event.target.value })} />
                   <button className="primary-button exam-save-button" onClick={addExam}>
                     <Save size={20} /> {editingExamId ? "更新" : "保存"}
                   </button>
                 </div>
+                {examError && <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 font-bold text-red-600" role="alert">{examError}</p>}
               </Panel>
               <Panel title="成绩筛选">
                 <div className="grid gap-3 md:grid-cols-4">
@@ -1498,7 +1589,7 @@ function App() {
               <div className="grid gap-5 xl:grid-cols-2">
                 <Panel title={timeComparisonTitle}>
                   <ChartBox>
-                    <ResponsiveContainer>
+                    <ResponsiveContainer minWidth={0} initialDimension={{ width: 800, height: 288 }}>
                       <BarChart data={timeComparisonStats}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="label" />
@@ -1513,7 +1604,7 @@ function App() {
                 </Panel>
                 <Panel title={completionTitle}>
                   <ChartBox>
-                    <ResponsiveContainer>
+                    <ResponsiveContainer minWidth={0} initialDimension={{ width: 800, height: 288 }}>
                       <BarChart data={timeComparisonStats}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="label" />
@@ -1526,7 +1617,7 @@ function App() {
                 </Panel>
                 <Panel title="分类时间占比">
                   <ChartBox>
-                    <ResponsiveContainer>
+                    <ResponsiveContainer minWidth={0} initialDimension={{ width: 800, height: 288 }}>
                       <PieChart>
                         <Pie data={categoryStats} dataKey="value" nameKey="name" innerRadius={55} outerRadius={95} paddingAngle={4}>
                           {categoryStats.map((entry, index) => (
@@ -1545,9 +1636,33 @@ function App() {
 
           {activeTab === "badges" && (
             <div className="space-y-5">
-              <Header title="勋章墙" subtitle="每个好习惯，都值得被看见。" />
+              <Header title="成就星图" subtitle="看得见进度、拿得到积分，每个小进步都有回应。" />
               {userRole === "parent" && (
                 <Panel title={editingBadgeId ? "修改勋章规则" : "添加勋章规则"}>
+                  {!editingBadgeId && (
+                    <div className="achievement-templates">
+                      <div className="achievement-guide">
+                        <Sparkles size={22} />
+                        <div><strong>成就会自动奖励积分</strong><span>奖励分值会根据目标难度自动计算，解锁只发放一次。</span></div>
+                      </div>
+                      <p>从模板开始</p>
+                      <div className="achievement-template-grid">
+                        {badgeTemplates.map((template) => {
+                          const TemplateIcon = getBadgeIcon(template.icon);
+                          return (
+                            <button
+                              type="button"
+                              key={template.name}
+                              onClick={() => setBadgeDraft({ ...template, id: "", unlocked: false })}
+                            >
+                              <TemplateIcon size={20} />
+                              <span><strong>{template.name}</strong><small>{getBadgeConditionLabel(template.conditionType)} · {template.conditionValue}</small></span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div className="badge-form">
                     <input className="input" placeholder="勋章名称" value={badgeDraft.name} onChange={(event) => setBadgeDraft({ ...badgeDraft, name: event.target.value })} />
                     <select className="input" value={badgeDraft.conditionType} onChange={(event) => setBadgeDraft({ ...badgeDraft, conditionType: event.target.value })}>
@@ -1559,6 +1674,9 @@ function App() {
                     <button className="primary-button" onClick={saveBadge}>
                       <Save size={20} /> {editingBadgeId ? "更新" : "添加"}
                     </button>
+                  </div>
+                  <div className="achievement-reward-preview">
+                    <Star size={18} /> 达成后自动获得 <strong>+{getBadgeRewardPoints(badgeDraft)} 积分</strong>
                   </div>
                   <textarea
                     className="input mt-3 min-h-24 w-full py-3"
@@ -1583,12 +1701,23 @@ function App() {
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {state.badges.map((badge) => {
                   const BadgeIcon = getBadgeIcon(badge.icon);
+                  const current = badgeStats[badge.conditionType] ?? 0;
+                  const progress = badge.unlocked ? 100 : Math.min(100, Math.round((current / Math.max(1, badge.conditionValue)) * 100));
                   return (
                     <article className={`badge-card ${badge.unlocked ? "badge-unlocked" : ""}`} key={badge.id}>
-                      <BadgeIcon size={34} />
+                      <div className="achievement-card-heading">
+                        <span><BadgeIcon size={34} /></span>
+                        <em>{badge.unlocked ? "已达成" : `+${getBadgeRewardPoints(badge)} 积分`}</em>
+                      </div>
                       <h3>{badge.name}</h3>
                       <p>{badge.description}</p>
-                      <span>{badge.unlocked ? "已解锁" : `${getBadgeConditionLabel(badge.conditionType)}：${badge.conditionValue}`}</span>
+                      <div className="achievement-progress-label">
+                        <strong>{badge.unlocked ? "已解锁" : getBadgeConditionLabel(badge.conditionType)}</strong>
+                        <span>{badge.unlocked ? "目标达成" : `${Math.min(current, badge.conditionValue)} / ${badge.conditionValue}`}</span>
+                      </div>
+                      <div className="achievement-progress" role="progressbar" aria-label={`${badge.name}进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+                        <i style={{ width: `${progress}%` }} />
+                      </div>
                       {userRole === "parent" && (
                         <div className="mt-3 flex gap-2">
                           <button className="secondary-button flex-1" onClick={() => editBadge(badge)}>
@@ -1763,6 +1892,10 @@ function App() {
           {activeTab === "settings" && (
             <div className="space-y-5">
               <Header title="设置与备份" subtitle="学习数据保存在 Supabase，JSON 备份可用于额外保险。" />
+              <Panel title="页面主题">
+                <p className="mb-4 font-bold text-slate-600">选择一种喜欢的成长星球外观。主题只保存在当前设备，不会影响学习数据。</p>
+                <ThemePicker expanded value={theme} onChange={setTheme} />
+              </Panel>
               <Panel title="家庭数据源">
                 <div className="space-y-4">
                   <p className="rounded-2xl bg-blue-50 p-4 text-blue-900">
@@ -1981,7 +2114,7 @@ function App() {
 
 function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <header className="rounded-[30px] bg-white p-5 shadow-soft">
+    <header className="app-header rounded-[30px] p-5 shadow-soft">
       <h2 className="mt-1 text-3xl font-black tracking-normal sm:text-4xl">{title}</h2>
       <p className="mt-2 text-lg text-slate-600">{subtitle}</p>
     </header>
@@ -2000,15 +2133,76 @@ function Metric({ title, value, suffix, tone }: { title: string; value: string; 
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-[28px] bg-white p-5 shadow-soft">
+    <section className="app-panel rounded-[28px] p-5 shadow-soft">
       <h2 className="mb-4 text-2xl font-black">{title}</h2>
       {children}
     </section>
   );
 }
 
-function ChartBox({ children }: { children: React.ReactNode }) {
-  return <div className="h-72 w-full">{children}</div>;
+function ChartBox({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`h-72 min-w-0 w-full ${className}`}>{children}</div>;
+}
+
+function ThemePicker({ value, onChange, compact = false, expanded = false }: { value: ThemeId; onChange: (theme: ThemeId) => void; compact?: boolean; expanded?: boolean }) {
+  if (compact) {
+    return (
+      <div className="theme-picker-compact" aria-label="快速切换页面主题">
+        {themeOptions.map((theme) => (
+          <button
+            type="button"
+            key={theme.id}
+            className={value === theme.id ? "theme-swatch theme-swatch-active" : "theme-swatch"}
+            style={{ "--swatch-main": theme.colors[0], "--swatch-soft": theme.colors[1] } as React.CSSProperties}
+            onClick={() => onChange(theme.id)}
+            aria-label={`使用${theme.name}主题`}
+            aria-pressed={value === theme.id}
+            title={theme.name}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className={expanded ? "theme-picker theme-picker-expanded" : "theme-picker"}>
+      {themeOptions.map((theme) => {
+        const ThemeIcon = theme.icon;
+        return (
+          <button
+            type="button"
+            key={theme.id}
+            className={value === theme.id ? "theme-choice theme-choice-active" : "theme-choice"}
+            onClick={() => onChange(theme.id)}
+            aria-pressed={value === theme.id}
+          >
+            <span className="theme-choice-icon" style={{ backgroundColor: theme.colors[1], color: theme.colors[0] }}><ThemeIcon size={22} /></span>
+            <span><strong>{theme.name}</strong>{expanded && <small>{theme.description}</small>}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type ScoreTrendPoint = {
+  id: string;
+  date: string;
+  label: string;
+  subject: string;
+  examName: string;
+  score: number;
+  color: string;
+};
+
+function ScoreTrendDot({ cx = 0, cy = 0, payload }: { cx?: number; cy?: number; payload?: ScoreTrendPoint }) {
+  if (!payload) return <g />;
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={7} fill="white" stroke={payload.color} strokeWidth={4} />
+      <title>{`${payload.subject} ${payload.examName}：${payload.score} 分`}</title>
+    </g>
+  );
 }
 
 type StudyTimelineEntry = {
@@ -2628,20 +2822,44 @@ function getSubjectColor(subjects: Subject[], name: string) {
   return subjects.find((subject) => subject.name === name)?.color ?? "#2563eb";
 }
 
-function buildSubjectScoreTrend(exams: ExamRecord[], subjects: Subject[]) {
-  const subjectNames = new Set(subjects.map((subject) => subject.name));
-  const rows = new Map<string, Record<string, string | number>>();
-  for (const exam of exams) {
-    if (!subjectNames.has(exam.subject)) continue;
-    const key = exam.examDate;
-    const row = rows.get(key) ?? { name: exam.examDate.slice(5) };
-    row[exam.subject] = Math.round((exam.score / exam.totalScore) * 100);
-    rows.set(key, row);
-  }
-  return [...rows.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-10)
-    .map(([, value]) => value);
+function buildScoreTrend(exams: ExamRecord[], subjects: Subject[]): ScoreTrendPoint[] {
+  const subjectColors = new Map(subjects.map((subject) => [subject.name, subject.color]));
+  return exams
+    .filter((exam) => subjectColors.has(exam.subject) && Number.isFinite(exam.score) && Number.isFinite(exam.totalScore) && exam.totalScore > 0)
+    .sort((left, right) => left.examDate.localeCompare(right.examDate) || left.id.localeCompare(right.id))
+    .slice(-12)
+    .map((exam) => ({
+      id: exam.id,
+      date: exam.examDate,
+      label: `${exam.examDate.slice(5)}·${exam.subject.slice(0, 1)}`,
+      subject: exam.subject,
+      examName: exam.examName,
+      score: formatPercent(exam.score, exam.totalScore),
+      color: subjectColors.get(exam.subject) ?? "#2563eb",
+    }));
+}
+
+function getScoreTrendDomain(points: ScoreTrendPoint[]): [number, number] {
+  if (points.length === 0) return [0, 100];
+  const scores = points.map((point) => point.score);
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  const padding = Math.max(5, Math.ceil((max - min) * 0.35));
+  let lower = Math.max(0, Math.floor((min - padding) / 10) * 10);
+  let upper = Math.min(100, Math.ceil((max + padding) / 10) * 10);
+  if (upper - lower < 20) lower = Math.max(0, upper - 20);
+  if (upper - lower < 20) upper = Math.min(100, lower + 20);
+  return [lower, upper];
+}
+
+function getScoreTrendTicks([lower, upper]: [number, number]) {
+  const ticks: number[] = [];
+  for (let value = Math.ceil(lower / 10) * 10; value <= upper; value += 10) ticks.push(value);
+  return ticks;
+}
+
+function normalizeTheme(value: string | null): ThemeId {
+  return themeOptions.some((theme) => theme.id === value) ? value as ThemeId : "cloud";
 }
 
 function normalizeOcrSettings(config: AppSettings["baiduOcr"]): AppSettings["baiduOcr"] {

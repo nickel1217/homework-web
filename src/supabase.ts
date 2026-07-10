@@ -321,12 +321,32 @@ export function getPointBalance(ledger: PointLedger[]) {
   return ledger.reduce((sum, row) => sum + row.points, 0);
 }
 
-export async function refreshCloudBadges(familyCode: string, tasks: Task[], badges: Badge[], exams: ExamRecord[] = [], startDate?: string) {
+export type BadgeStats = Record<string, number>;
+
+export function getBadgeRewardPoints(badge: Badge) {
+  const value = Math.max(1, badge.conditionValue);
+  const rewards: Record<string, number> = {
+    completedTasks: Math.min(30, Math.max(2, Math.ceil(value / 5) * 2)),
+    studyMinutes: Math.min(30, Math.max(3, Math.ceil(value / 60) * 3)),
+    completedDays: Math.min(30, Math.max(3, Math.ceil(value / 3) * 3)),
+    perfectDays: Math.min(36, Math.max(5, Math.ceil(value / 2) * 4)),
+    consecutiveDays: Math.min(40, Math.max(6, value * 2)),
+    examsAbove90: Math.min(30, Math.max(5, value * 5)),
+    examsAbove95: Math.min(40, Math.max(8, value * 8)),
+    pointsEarned: Math.min(30, Math.max(3, Math.ceil(value / 20) * 3)),
+    currentPoints: Math.min(30, Math.max(3, Math.ceil(value / 30) * 3)),
+    rewardsRedeemed: Math.min(30, Math.max(5, value * 5)),
+  };
+  return rewards[badge.conditionType] ?? 5;
+}
+
+export function getBadgeStats(tasks: Task[], exams: ExamRecord[] = [], ledger: PointLedger[] = [], startDate?: string): BadgeStats {
   const scopedTasks = startDate ? tasks.filter((task) => task.startDate >= startDate) : tasks;
   const scopedExams = startDate ? exams.filter((exam) => exam.examDate >= startDate) : exams;
+  const scopedLedger = startDate ? ledger.filter((row) => getLocalDateText(row.createdAt) >= startDate) : ledger;
   const completedTasks = scopedTasks.filter((task) => task.status === "completed").length;
   const studyMinutes = scopedTasks.reduce((sum, task) => sum + (task.actualMinutes ?? 0), 0);
-  const completedDates = new Set(scopedTasks.filter((task) => task.status === "completed").map((task) => (task.endTime ? task.endTime.slice(0, 10) : task.startDate)));
+  const completedDates = new Set(scopedTasks.filter((task) => task.status === "completed").map((task) => (task.endTime ? getLocalDateText(task.endTime) : task.startDate)));
   const tasksByDate = new Map<string, Task[]>();
   for (const task of scopedTasks) {
     const list = tasksByDate.get(task.startDate) ?? [];
@@ -334,19 +354,75 @@ export async function refreshCloudBadges(familyCode: string, tasks: Task[], badg
     tasksByDate.set(task.startDate, list);
   }
   const perfectDays = [...tasksByDate.values()].filter((items) => items.length > 0 && items.every((task) => task.status === "completed")).length;
+  const consecutiveDays = getLongestDateStreak([...completedDates]);
   const examsAbove90 = scopedExams.filter((exam) => formatExamPercent(exam) >= 90).length;
   const examsAbove95 = scopedExams.filter((exam) => formatExamPercent(exam) >= 95).length;
-  const stats: Record<string, number> = { completedTasks, studyMinutes, completedDays: completedDates.size, perfectDays, examsAbove90, examsAbove95 };
+  const pointsEarned = scopedLedger.filter((row) => row.points > 0).reduce((sum, row) => sum + row.points, 0);
+  const currentPoints = ledger.reduce((sum, row) => sum + row.points, 0);
+  const rewardsRedeemed = scopedLedger.filter((row) => row.type === "spend").length;
+  return { completedTasks, studyMinutes, completedDays: completedDates.size, perfectDays, consecutiveDays, examsAbove90, examsAbove95, pointsEarned, currentPoints, rewardsRedeemed };
+}
+
+export async function refreshCloudBadges(
+  familyCode: string,
+  tasks: Task[],
+  badges: Badge[],
+  exams: ExamRecord[] = [],
+  ledger: PointLedger[] = [],
+  startDate?: string,
+) {
+  const stats = getBadgeStats(tasks, exams, ledger, startDate);
   const unlockedAt = new Date().toISOString();
   const toUnlock = badges.filter((badge) => !badge.unlocked && (stats[badge.conditionType] ?? 0) >= badge.conditionValue);
 
   if (toUnlock.length === 0) return;
 
-  await Promise.all([
-    ...toUnlock.map((badge) =>
+  await upsertRows(
+    "family_ledger",
+    toUnlock.map((badge) => ({
+      id: `badge-reward:${familyCode}:${badge.id}`,
+      family_code: familyCode,
+      type: "earn",
+      points: getBadgeRewardPoints(badge),
+      reason: `解锁成就：${badge.name}`,
+      created_at: unlockedAt,
+    })),
+  );
+  const unlockResults = await Promise.all(
+    toUnlock.map((badge) =>
       supabase.from("family_badges").update({ unlocked: true, unlocked_at: unlockedAt }).eq("family_code", familyCode).eq("id", badge.id),
     ),
-  ]);
+  );
+  const unlockError = unlockResults.find((result) => result.error)?.error;
+  if (unlockError) throw unlockError;
+}
+
+function getLongestDateStreak(dates: string[]) {
+  const sorted = [...new Set(dates)].sort();
+  let longest = 0;
+  let current = 0;
+  let previous = "";
+  for (const date of sorted) {
+    current = previous && addUtcDays(previous, 1) === date ? current + 1 : 1;
+    longest = Math.max(longest, current);
+    previous = date;
+  }
+  return longest;
+}
+
+function addUtcDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getLocalDateText(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 async function selectRows<T>(table: string, familyCode: string, order?: string, ascending = true): Promise<T[]> {
