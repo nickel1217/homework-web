@@ -153,7 +153,7 @@ button:disabled {
   }
 
   .timeline-track {
-    @apply relative overflow-hidden rounded-r-2xl bg-slate-50;
+    @apply relative h-11 overflow-hidden rounded-r-2xl bg-slate-50;
   }
 
   .timeline-gridline {
@@ -161,7 +161,7 @@ button:disabled {
   }
 
   .timeline-block {
-    @apply absolute z-10 flex h-8 min-w-5 items-center gap-2 overflow-hidden rounded-lg px-2 text-white shadow-sm;
+    @apply absolute top-1.5 z-10 flex h-8 min-w-5 items-center gap-2 overflow-hidden rounded-lg px-2 text-white shadow-sm outline-none transition hover:z-20 hover:brightness-105 focus:z-20 focus:ring-4 focus:ring-blue-300;
   }
 
   .timeline-block span {
@@ -178,6 +178,23 @@ button:disabled {
 
   .timeline-block-running {
     @apply animate-pulse ring-2 ring-yellow-300 ring-offset-1;
+  }
+
+  .timeline-tooltip {
+    @apply pointer-events-none fixed z-[100] flex w-[280px] flex-col gap-1 rounded-2xl bg-slate-900 px-4 py-3 text-left text-white shadow-2xl;
+    transform: translate(-50%, -100%);
+  }
+
+  .timeline-tooltip strong {
+    @apply truncate text-base font-black;
+  }
+
+  .timeline-tooltip span {
+    @apply text-sm font-bold text-slate-200;
+  }
+
+  .timeline-tooltip small {
+    @apply mt-1 border-t border-slate-700 pt-2 text-xs font-bold text-slate-400;
   }
 
   @media (max-width: 760px) {

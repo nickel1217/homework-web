@@ -2019,6 +2019,7 @@ type StudyTimelineEntry = {
   endMinute: number;
   startLabel: string;
   endLabel: string;
+  durationMinutes: number;
   estimated: boolean;
   running: boolean;
 };
@@ -2026,6 +2027,7 @@ type StudyTimelineEntry = {
 type StudyTimelineDay = { date: string; entries: StudyTimelineEntry[] };
 
 function StudyTimeline({ days, subjects }: { days: StudyTimelineDay[]; subjects: Subject[] }) {
+  const [tooltip, setTooltip] = useState<{ entry: StudyTimelineEntry; x: number; y: number } | null>(null);
   const entries = days.flatMap((day) => day.entries);
   if (entries.length === 0) return <EmptyText text="这个范围内还没有可显示的计时记录。开始作业计时后，这里会出现具体时间段。" />;
 
@@ -2058,17 +2060,27 @@ function StudyTimeline({ days, subjects }: { days: StudyTimelineDay[]; subjects:
                 <strong>{day.date.slice(5)}</strong>
                 <span>{getChineseWeekday(day.date)}</span>
               </div>
-              <div className="timeline-track" style={{ height: `${Math.max(44, day.entries.length * 36 + 8)}px` }}>
+              <div className="timeline-track">
                 {ticks.map((minute) => <i className="timeline-gridline" key={minute} style={{ left: `${((minute - rangeStart) / (rangeEnd - rangeStart)) * 100}%` }} />)}
-                {day.entries.map((entry, index) => {
+                {day.entries.map((entry) => {
                   const left = ((Math.max(entry.startMinute, rangeStart) - rangeStart) / (rangeEnd - rangeStart)) * 100;
                   const width = Math.max(1.5, ((Math.min(entry.endMinute, rangeEnd) - Math.max(entry.startMinute, rangeStart)) / (rangeEnd - rangeStart)) * 100);
                   return (
                     <div
                       className={`timeline-block ${entry.estimated ? "timeline-block-estimated" : ""} ${entry.running ? "timeline-block-running" : ""}`}
                       key={entry.id}
-                      style={{ left: `${left}%`, width: `${width}%`, top: `${index * 36 + 6}px`, backgroundColor: getSubjectColor(subjects, entry.category) ?? "#6366f1" }}
-                      title={`${entry.title} · ${entry.startLabel}–${entry.endLabel}${entry.estimated ? "（回推）" : ""}`}
+                      style={{ left: `${left}%`, width: `${width}%`, backgroundColor: getSubjectColor(subjects, entry.category) ?? "#6366f1" }}
+                      tabIndex={0}
+                      role="img"
+                      aria-label={`${entry.title}，${entry.category}，${entry.startLabel} 到 ${entry.endLabel}，${entry.durationMinutes} 分钟`}
+                      onMouseEnter={(event) => setTooltip({ entry, x: clampTimelineTooltipX(event.clientX), y: event.clientY - 12 })}
+                      onMouseMove={(event) => setTooltip({ entry, x: clampTimelineTooltipX(event.clientX), y: event.clientY - 12 })}
+                      onMouseLeave={() => setTooltip(null)}
+                      onFocus={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setTooltip({ entry, x: clampTimelineTooltipX(rect.left + rect.width / 2), y: rect.top - 12 });
+                      }}
+                      onBlur={() => setTooltip(null)}
                     >
                       <span>{entry.title}</span><small>{entry.startLabel}–{entry.endLabel}</small>
                     </div>
@@ -2079,8 +2091,20 @@ function StudyTimeline({ days, subjects }: { days: StudyTimelineDay[]; subjects:
           ))}
         </div>
       </div>
+      {tooltip && (
+        <div className="timeline-tooltip" role="tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
+          <strong>{tooltip.entry.title}</strong>
+          <span>{tooltip.entry.category} · {tooltip.entry.running ? "进行中" : "已完成"}</span>
+          <span>{tooltip.entry.startLabel}–{tooltip.entry.endLabel} · {tooltip.entry.durationMinutes} 分钟</span>
+          <small>{tooltip.entry.estimated ? "旧记录：时间段由实际耗时回推" : "计时记录：准确开始和结束时间"}</small>
+        </div>
+      )}
     </div>
   );
+}
+
+function clampTimelineTooltipX(x: number) {
+  return Math.min(window.innerWidth - 150, Math.max(150, x));
 }
 
 function EmptyText({ text }: { text: string }) {
@@ -2516,6 +2540,7 @@ function buildStudyTimeline(tasks: Task[], dates: string[], deletedTaskIds: Set<
         endMinute: Math.max(startMinute + 1, endMinute),
         startLabel: formatClockMinute(startMinute),
         endLabel: formatClockMinute(endMinute),
+        durationMinutes: Math.max(1, Math.round((segmentEnd.getTime() - segmentStart.getTime()) / 60000)),
         estimated,
         running,
       });
